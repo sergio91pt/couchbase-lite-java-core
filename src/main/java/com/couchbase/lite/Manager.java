@@ -485,7 +485,7 @@ public final class Manager {
             if (path == null) {
                 return null;
             }
-            db = new Database(path, this);
+            db = new DatabaseSQLite(path, this);
             if (mustExist && !db.exists()) {
                 Log.w(Database.TAG, "mustExist is true and db (%s) does not exist", name);
                 return null;

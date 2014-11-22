@@ -1,6 +1,7 @@
 package com.couchbase.lite.router;
 
 
+import com.couchbase.DatabaseUtil;
 import com.couchbase.lite.AsyncTask;
 import com.couchbase.lite.Attachment;
 import com.couchbase.lite.BlobStoreWriter;
@@ -381,7 +382,7 @@ public class Router implements Database.ChangeListener {
             String name = path.get(1);
             if(!name.startsWith("_")) {
                 // Regular document
-                if(!Database.isValidDocumentId(name)) {
+                if(!DatabaseUtil.isValidDocumentId(name)) {
                     connection.setResponseCode(Status.BAD_REQUEST);
                     try {
                         connection.getResponseOutputStream().close();
@@ -671,7 +672,7 @@ public class Router implements Database.ChangeListener {
         int count = Math.min(1000, getIntQuery("count", 1));
         List<String> uuids = new ArrayList<String>(count);
         for(int i=0; i<count; i++) {
-            uuids.add(Database.generateDocumentId());
+            uuids.add(DatabaseUtil.generateDocumentId());
         }
         Map<String,Object> result = new HashMap<String,Object>();
         result.put("uuids", uuids);
@@ -941,7 +942,7 @@ public class Router implements Database.ChangeListener {
                     if(rev.getRevId() == null || rev.getDocId() == null || !rev.getDocId().equals(docID)) {
                         status =  new Status(Status.BAD_REQUEST);
                     } else {
-                        List<String> history = Database.parseCouchDBRevisionHistory(doc);
+                        List<String> history = DatabaseUtil.parseCouchDBRevisionHistory(doc);
                         db.forceInsert(rev, history, null);
                     }
                 } else {
@@ -1482,7 +1483,7 @@ public class Router implements Database.ChangeListener {
                         outStatus.setCode(Status.BAD_REQUEST);
                         return null;
                     }
-                    docID = Database.generateDocumentId();
+                    docID = DatabaseUtil.generateDocumentId();
                 }
             }
             // PUT's revision ID comes from the JSON body.
@@ -1584,7 +1585,7 @@ public class Router implements Database.ChangeListener {
             if(rev.getRevId() == null || rev.getDocId() == null || !rev.getDocId().equals(docID)) {
                 throw new CouchbaseLiteException(Status.BAD_REQUEST);
             }
-            List<String> history = Database.parseCouchDBRevisionHistory(body.getProperties());
+            List<String> history = DatabaseUtil.parseCouchDBRevisionHistory(body.getProperties());
             db.forceInsert(rev, history, null);
         }
         return status;

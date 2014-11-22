@@ -1,5 +1,6 @@
 package com.couchbase.lite.replicator;
 
+import com.couchbase.DatabaseUtil;
 import com.couchbase.lite.CouchbaseLiteException;
 import com.couchbase.lite.Database;
 import com.couchbase.lite.Manager;
@@ -493,7 +494,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
         try {
             for (RevisionInternal rev : downloads) {
                 long fakeSequence = rev.getSequence();
-                List<String> history = db.parseCouchDBRevisionHistory(rev.getProperties());
+                List<String> history = DatabaseUtil.parseCouchDBRevisionHistory(rev.getProperties());
                 if (history.isEmpty() && rev.getGeneration() > 1) {
                     Log.w(Log.TAG_SYNC, "%s: Missing revision history in response for: %s", this, rev);
                     setError(new CouchbaseLiteException(Status.UPSTREAM_ERROR));
@@ -730,7 +731,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
             return;
         }
 
-        if (!Database.isValidDocumentId(docID)) {
+        if (!DatabaseUtil.isValidDocumentId(docID)) {
             Log.w(Log.TAG_SYNC, "%s: Received invalid doc ID from _changes: %s", this, change);
             return;
         }

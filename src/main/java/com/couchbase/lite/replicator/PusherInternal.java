@@ -1,5 +1,6 @@
 package com.couchbase.lite.replicator;
 
+import com.couchbase.DatabaseUtil;
 import com.couchbase.lite.BlobKey;
 import com.couchbase.lite.BlobStore;
 import com.couchbase.lite.ChangesOptions;
@@ -420,7 +421,7 @@ public class PusherInternal extends ReplicationInternal implements Database.Chan
                             // Look for the latest common ancestor and stub out older attachments:
                             int minRevPos = findCommonAncestor(populatedRev, possibleAncestors);
 
-                            Database.stubOutAttachmentsInRevBeforeRevPos(populatedRev,minRevPos + 1,false);
+                            DatabaseUtil.stubOutAttachmentsInRevBeforeRevPos(populatedRev, minRevPos + 1, false);
 
                             properties = populatedRev.getProperties();
 
@@ -679,7 +680,7 @@ public class PusherInternal extends ReplicationInternal implements Database.Chan
         if (possibleRevIDs == null || possibleRevIDs.size() == 0) {
             return 0;
         }
-        List<String> history = Database.parseCouchDBRevisionHistory(rev.getProperties());
+        List<String> history = DatabaseUtil.parseCouchDBRevisionHistory(rev.getProperties());
 
         //rev is missing _revisions property
         assert(history != null);
@@ -691,7 +692,7 @@ public class PusherInternal extends ReplicationInternal implements Database.Chan
             return 0;
         }
 
-        int generation = Database.parseRevIDNumber(ancestorID);
+        int generation = DatabaseUtil.parseRevIDNumber(ancestorID);
 
         return generation;
     }
