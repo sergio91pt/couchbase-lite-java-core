@@ -1,13 +1,18 @@
 package com.couchbase.lite;
 
+import com.couchbase.cbforest.OpenFlags;
 import com.couchbase.lite.internal.AttachmentInternal;
+import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.replicator.Replication;
 import com.couchbase.lite.storage.SQLException;
 import com.couchbase.lite.storage.SQLiteStorageEngine;
+import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.support.PersistentCookieStore;
+import com.couchbase.lite.util.Log;
 
+import java.io.File;
 import java.io.InputStream;
 import java.net.URL;
 import java.util.EnumSet;
@@ -21,12 +26,71 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Created by hideki on 11/22/14.
  */
 public class DatabaseCBForest implements Database {
+    /** static constructor */
+    static {
+        try{
+            System.loadLibrary("cbforest");
+            Log.i("DatabaseCBForest", "load libcbforest OK !!!");
+        }
+        catch(Exception e){
+            Log.e("DatabaseCBForest", "Failed to load libcbforest !!!");
+        }
+    }
+
+
+    private String path;
+    private String name;
+    private Manager manager;
+    private boolean open = false;
+
+    // CBForest
+    com.couchbase.cbforest.Database database;
+
+    /**
+     * Constructor
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public DatabaseCBForest(String path, Manager manager) {
+        assert(new File(path).isAbsolute()); //path must be absolute
+        this.path = path;
+        this.name = FileDirUtils.getDatabaseNameFromPath(path);
+        this.manager = manager;
+        //this.changeListeners = new CopyOnWriteArrayList<ChangeListener>();
+        //this.docCache = new Cache<String, Document>();
+        //this.startTime = System.currentTimeMillis();
+        //this.changesToNotify = new ArrayList<DocumentChange>();
+        //this.activeReplicators =  Collections.newSetFromMap(new ConcurrentHashMap());
+        //this.allReplicators = Collections.newSetFromMap(new ConcurrentHashMap());
+
+    }
+    public boolean open() {
+        database = new com.couchbase.cbforest.Database(path, OpenFlags.FDB_OPEN_FLAG_CREATE, com.couchbase.cbforest.Database.defaultConfig());
+        open = true;
+        return open;
+    }
+
+    public boolean close() {
+        if(!open) {
+            return false;
+        }
+
+        if(database != null) {
+            database.delete(); // <- release instance. not delete database
+            database = null;
+        }
+
+        return true;
+    }
     public String getName() {
-        return null;
+        return name;
+    }
+    public String getPath() {
+        return path;
     }
 
     public Manager getManager() {
-        return null;
+        return manager;
     }
 
     public int getDocumentCount() {
@@ -34,7 +98,7 @@ public class DatabaseCBForest implements Database {
     }
 
     public long getLastSequenceNumber() {
-        return 0;
+        return database.getLastSequence().longValue();
     }
 
     public List<Replication> getAllReplications() {
@@ -42,11 +106,12 @@ public class DatabaseCBForest implements Database {
     }
 
     public void compact() throws CouchbaseLiteException {
-
+        database.compact();
     }
 
     public void delete() throws CouchbaseLiteException {
-
+        // delete db file and index
+        database.deleteDatabase();
     }
 
     public Document getDocument(String documentId) {
@@ -161,17 +226,7 @@ public class DatabaseCBForest implements Database {
         return false;
     }
 
-    public boolean open() {
-        return false;
-    }
 
-    public boolean close() {
-        return false;
-    }
-
-    public String getPath() {
-        return null;
-    }
 
     public SQLiteStorageEngine getDatabase() {
         return null;
