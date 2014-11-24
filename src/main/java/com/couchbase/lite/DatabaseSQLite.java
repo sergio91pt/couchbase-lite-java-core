@@ -409,7 +409,7 @@ public final class DatabaseSQLite implements Database {
         }
         Document doc = docCache.get(documentId);
         if (doc == null) {
-            doc = new DocumentSQLite(this, documentId);
+            doc = new Document(this, documentId);
             if (doc == null) {
                 return null;
             }
