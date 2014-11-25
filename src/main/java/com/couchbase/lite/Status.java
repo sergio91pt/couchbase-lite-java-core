@@ -23,9 +23,12 @@ package com.couchbase.lite;
 public class Status {
 
     public static final int UNKNOWN = -1;
+
     public static final int OK = 200;
     public static final int CREATED = 201;
+
     public static final int NOT_MODIFIED = 304;
+
     public static final int BAD_REQUEST = 400;
     public static final int UNAUTHORIZED = 401;
     public static final int FORBIDDEN = 403;
@@ -34,9 +37,15 @@ public class Status {
     public static final int NOT_ACCEPTABLE = 406;
     public static final int CONFLICT = 409;
     public static final int PRECONDITION_FAILED = 412;
+
+    // Non-HTTP errors:
     public static final int BAD_ENCODING = 490;
     public static final int BAD_ATTACHMENT = 491;
     public static final int BAD_JSON = 493;
+    public static final int BAD_ID = 494;
+    public static final int BAD_PARAM = 495;
+    public static final int DELETED = 496; // Document deleted
+
     public static final int INTERNAL_SERVER_ERROR = 500;
     public static final int STATUS_ATTACHMENT_ERROR = 592;
     public static final int UPSTREAM_ERROR = 589;
