@@ -408,7 +408,7 @@ public final class Document {
             hasTrueDeletedProperty = properties.get("_deleted") != null && ((Boolean)properties.get("_deleted")).booleanValue();
         }
         boolean deleted = (properties == null) || hasTrueDeletedProperty;
-        RevisionInternal rev = new RevisionInternal(documentId, null, deleted, database);
+        RevisionInternal rev = new RevisionInternal(documentId, null, deleted);
         if (properties != null) {
             rev.setProperties(properties);
         }
@@ -464,7 +464,7 @@ public final class Document {
         if (currentRevision == null || revIdGreaterThanCurrent(revId)) {
             Map<String, Object> properties = row.getDocumentProperties();
             if (properties != null) {
-                RevisionInternal rev = new RevisionInternal(properties, row.getDatabase());
+                RevisionInternal rev = new RevisionInternal(properties);
                 currentRevision = new SavedRevision(this, rev);
             }
         }

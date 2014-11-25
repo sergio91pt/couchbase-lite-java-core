@@ -698,7 +698,7 @@ public class DatabaseCBForest implements Database {
             if(newRevID == null)
                 throw new CouchbaseLiteException(Status.BAD_ID);
 
-            putRev = ;
+            //putRev = ;
         }
         finally {
             endTransaction(resultStatus.isSuccessful());

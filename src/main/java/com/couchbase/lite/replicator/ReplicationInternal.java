@@ -11,9 +11,6 @@ import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.support.BatchProcessor;
 import com.couchbase.lite.support.Batcher;
 import com.couchbase.lite.support.HttpClientFactory;
-import com.couchbase.lite.support.RemoteMultipartDownloaderRequest;
-import com.couchbase.lite.support.RemoteMultipartRequest;
-import com.couchbase.lite.support.RemoteRequest;
 import com.couchbase.lite.support.RemoteRequestCompletionBlock;
 import com.couchbase.lite.support.RemoteRequestRetry;
 import com.couchbase.lite.util.CollectionUtils;
@@ -44,7 +41,6 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -1215,7 +1211,7 @@ abstract class ReplicationInternal {
                     assert(xformed.getProperties().get("_revisions").equals(rev.getProperties().get("_revisions")));
                     if (xformed.getProperties().get("_attachments") != null) {
                         // Insert 'revpos' properties into any attachments added by the callback:
-                        RevisionInternal mx = new RevisionInternal(xformed.getProperties(), db);
+                        RevisionInternal mx = new RevisionInternal(xformed.getProperties());
                         xformed = mx;
                         mx.mutateAttachments(new CollectionUtils.Functor<Map<String,Object>,Map<String,Object>>() {
                             public Map<String, Object> invoke(Map<String, Object> info) {

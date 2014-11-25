@@ -297,9 +297,9 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                             // Find the matching revision in 'remainingRevs' and get its sequence:
                             RevisionInternal rev;
                             if (props.get("_id") != null) {
-                                rev = new RevisionInternal(props, db);
+                                rev = new RevisionInternal(props);
                             } else {
-                                rev = new RevisionInternal((String) props.get("id"), (String) props.get("rev"), false, db);
+                                rev = new RevisionInternal((String) props.get("id"), (String) props.get("rev"), false);
                             }
 
                             int pos = remainingRevs.indexOf(rev);
@@ -442,7 +442,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                             for (Map<String, Object> row : rows) {
                                 Map<String, Object> doc = (Map<String, Object>) row.get("doc");
                                 if (doc != null && doc.get("_attachments") == null) {
-                                    RevisionInternal rev = new RevisionInternal(doc, db);
+                                    RevisionInternal rev = new RevisionInternal(doc);
                                     RevisionInternal removedRev = remainingRevs.removeAndReturnRev(rev);
                                     if (removedRev != null) {
                                         rev.setSequence(removedRev.getSequence());
@@ -610,7 +610,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
                     revisionFailed(rev, e);
                 } else {
                     Map<String, Object> properties = (Map<String, Object>) result;
-                    PulledRevision gotRev = new PulledRevision(properties, db);
+                    PulledRevision gotRev = new PulledRevision(properties);
                     gotRev.setSequence(rev.getSequence());
                     // Add to batcher ... eventually it will be fed to -insertDownloads:.
 
@@ -742,7 +742,7 @@ public class PullerInternal extends ReplicationInternal implements ChangeTracker
             if (revID == null) {
                 continue;
             }
-            PulledRevision rev = new PulledRevision(docID, revID, deleted, db);
+            PulledRevision rev = new PulledRevision(docID, revID, deleted);
             rev.setRemoteSequenceID(lastSequence);
             Log.d(Log.TAG_SYNC, "%s: adding rev to inbox %s", this, rev);
 
