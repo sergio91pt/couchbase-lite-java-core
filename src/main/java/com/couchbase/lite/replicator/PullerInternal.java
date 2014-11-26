@@ -1,6 +1,6 @@
 package com.couchbase.lite.replicator;
 
-import com.couchbase.DatabaseUtil;
+import com.couchbase.lite.DatabaseUtil;
 import com.couchbase.lite.CouchbaseLiteException;
 import com.couchbase.lite.Database;
 import com.couchbase.lite.Manager;

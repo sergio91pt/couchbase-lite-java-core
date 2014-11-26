@@ -1,6 +1,5 @@
-package com.couchbase;
+package com.couchbase.lite;
 
-import com.couchbase.lite.Misc;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.util.CollectionUtils;

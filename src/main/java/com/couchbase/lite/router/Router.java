@@ -1,7 +1,7 @@
 package com.couchbase.lite.router;
 
 
-import com.couchbase.DatabaseUtil;
+import com.couchbase.lite.DatabaseUtil;
 import com.couchbase.lite.AsyncTask;
 import com.couchbase.lite.Attachment;
 import com.couchbase.lite.BlobStoreWriter;

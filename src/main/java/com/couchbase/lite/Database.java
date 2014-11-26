@@ -476,7 +476,9 @@ public interface Database {
      * @exclude
      */
     @InterfaceAudience.Private
-    public RevisionInternal getDocumentWithIDAndRev(String id, String rev, EnumSet<TDContentOptions> contentOptions) ;
+    public RevisionInternal getDocumentWithIDAndRev(String id, String rev, EnumSet<TDContentOptions> contentOptions);
+    // TODO: Change to throw CouchbaseLiteException
+    //public RevisionInternal getDocumentWithIDAndRev(String id, String rev, EnumSet<TDContentOptions> contentOptions)  throws CouchbaseLiteException ;
 
     /**
      * @exclude

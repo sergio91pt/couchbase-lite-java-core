@@ -17,7 +17,6 @@
 
 package com.couchbase.lite;
 
-import com.couchbase.DatabaseUtil;
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.internal.InterfaceAudience;

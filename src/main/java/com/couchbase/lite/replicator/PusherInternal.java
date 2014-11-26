@@ -1,6 +1,6 @@
 package com.couchbase.lite.replicator;
 
-import com.couchbase.DatabaseUtil;
+import com.couchbase.lite.DatabaseUtil;
 import com.couchbase.lite.BlobKey;
 import com.couchbase.lite.BlobStore;
 import com.couchbase.lite.ChangesOptions;

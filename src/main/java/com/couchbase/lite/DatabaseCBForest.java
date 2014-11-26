@@ -1,11 +1,6 @@
 package com.couchbase.lite;
 
-import com.couchbase.DatabaseUtil;
-import com.couchbase.cbforest.OpenFlags;
-import com.couchbase.cbforest.RevID;
-import com.couchbase.cbforest.Slice;
-import com.couchbase.cbforest.Transaction;
-import com.couchbase.cbforest.VersionedDocument;
+import com.couchbase.cbforest.*;
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -24,10 +19,12 @@ import java.net.URL;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,6 +44,9 @@ public class DatabaseCBForest implements Database {
         }
     }
 
+    // Default value for maxRevTreeDepth, the max rev depth to preserve in a prune operation
+    private static final int DEFAULT_MAX_REVS = Integer.MAX_VALUE;
+
     public final static String TAG ="DatabaseCBForest";
 
     private String path = null;
@@ -58,21 +58,28 @@ public class DatabaseCBForest implements Database {
 
     private Map<String, Validator> validations = null;
 
+    final private CopyOnWriteArrayList<ChangeListener> changeListeners;
     private Cache<String, Document> docCache;
+    private List<DocumentChange> changesToNotify;
+    private boolean postingChangeNotifications = false;
+
+
+    private int maxRevTreeDepth = DEFAULT_MAX_REVS;
 
     // CBForest
     com.couchbase.cbforest.Database database;
-    Transaction transaction;
+    //com.couchbase.cbforest.Transaction transaction;
+    com.couchbase.cbforest.Transaction forestTransaction;
 
     public DatabaseCBForest(String path, Manager manager) {
         assert(new File(path).isAbsolute()); //path must be absolute
         this.path = path;
         this.name = FileDirUtils.getDatabaseNameFromPath(path);
         this.manager = manager;
-        //this.changeListeners = new CopyOnWriteArrayList<ChangeListener>();
+        this.changeListeners = new CopyOnWriteArrayList<ChangeListener>();
         this.docCache = new Cache<String, Document>();
         //this.startTime = System.currentTimeMillis();
-        //this.changesToNotify = new ArrayList<DocumentChange>();
+        this.changesToNotify = new ArrayList<DocumentChange>();
         //this.activeReplicators =  Collections.newSetFromMap(new ConcurrentHashMap());
         //this.allReplicators = Collections.newSetFromMap(new ConcurrentHashMap());
 
@@ -221,20 +228,24 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
+    // same?
+    @InterfaceAudience.Public
     public void addChangeListener(ChangeListener listener) {
-
+        changeListeners.addIfAbsent(listener);
     }
 
+    // same?
+    @InterfaceAudience.Public
     public void removeChangeListener(ChangeListener listener) {
-
+        changeListeners.remove(listener);
     }
 
     public int getMaxRevTreeDepth() {
-        return 0;
+        return maxRevTreeDepth;
     }
 
     public void setMaxRevTreeDepth(int maxRevTreeDepth) {
-
+        this.maxRevTreeDepth = maxRevTreeDepth;
     }
 
     public Document getCachedDocument(String documentID) {
@@ -286,27 +297,29 @@ public class DatabaseCBForest implements Database {
 
     public boolean beginTransaction() {
         // Transaction() -> db.beginTransaction()
-        transaction = new Transaction(database);
+        forestTransaction = new Transaction(database);
         transactionLevel++;
-        Log.i(Log.TAG, "%s Begin transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
+        Log.w(TAG, "%s Begin transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
         return true;
     }
 
     public boolean endTransaction(boolean commit) {
+
         assert(transactionLevel > 0);
+        Log.w(TAG, "endTransaction() commit => " + commit);
 
         if(commit) {
-            Log.i(Log.TAG, "%s Committing transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
+            Log.i(TAG, "%s Committing transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
             // ~Transaction() -> db.endTransaction() -> fdb_end_transaction
         }
         else {
-            Log.i(Log.TAG, "%s CANCEL transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
+            Log.i(TAG, "%s CANCEL transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
             // set state -> abort
-            transaction.abort();
+            forestTransaction.abort();
             // ~Transaction() -> db.endTransaction() -> fdb_abort_transaction
         }
-        transaction.delete();
-        transaction = null;
+        forestTransaction.delete();
+        forestTransaction = null;
 
         transactionLevel--;
 
@@ -337,8 +350,45 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public RevisionInternal getDocumentWithIDAndRev(String id, String rev, EnumSet<TDContentOptions> contentOptions) {
-        return null;
+    /**
+     * in CBLDatabase+Internal.m
+     * - (CBL_Revision*) getDocumentWithID: (NSString*)docID
+     *                          revisionID: (NSString*)inRevID
+     *                             options: (CBLContentOptions)options
+     *                              status: (CBLStatus*)outStatus
+     */
+    public RevisionInternal getDocumentWithIDAndRev(String docID, String inRevID, EnumSet<TDContentOptions> options) {
+        RevisionInternal result = null;
+
+        // TODO: add VersionDocument(Database, String)
+        VersionedDocument doc = new VersionedDocument(database, new Slice(docID));
+        Log.i(TAG, "[getDocumentWithIDAndRev()] docID => "+docID + ", doc.exists() => "+doc.exists());
+        if(!doc.exists()) {
+            //throw new CouchbaseLiteException(Status.NOT_FOUND);
+            return null;
+        }
+
+        String revID = inRevID;
+        if(revID == null){
+            com.couchbase.cbforest.Revision rev = doc.currentRevision();
+            if(rev == null || rev.isDeleted()) {
+                //throw new CouchbaseLiteException(Status.DELETED);
+                return null;
+            }
+            // TODO: add String getRevID()
+            // TODO: revID is something wrong!!!!!
+            //revID = rev.getRevID().getBuf();
+        }
+
+        result = ForestBridge.revisionObjectFromForestDoc(doc, revID, options);
+        if(result == null)
+            //throw new CouchbaseLiteException(Status.NOT_FOUND);
+            return null;
+        // TODO: Attachment support
+
+        // TODO: need to release document?
+
+        return result;
     }
 
     public boolean existsDocumentWithIDAndRev(String docId, String revId) {
@@ -619,6 +669,7 @@ public class DatabaseCBForest implements Database {
         }
 
         RevisionInternal putRev = null;
+        DocumentChange change = null;
 
 
         // TODO: Should be byte[] instead of String??
@@ -694,21 +745,85 @@ public class DatabaseCBForest implements Database {
 
             boolean hasValidations = validations != null && validations.size() > 0;
 
+            // Compute the new revID:
             String newRevID = generateRevIDForJSON(json.getBytes(), deleting, prevRevID);
             if(newRevID == null)
-                throw new CouchbaseLiteException(Status.BAD_ID);
+                throw new CouchbaseLiteException(Status.BAD_ID); // invalid previous revID (no numeric prefix)
 
-            //putRev = ;
+            putRev = new RevisionInternal(docID, newRevID, deleting);
+
+            if(properties!=null){
+                properties.put("_id", docID);
+                properties.put("_rev", newRevID);
+                putRev.setProperties(properties);
+            }
+
+            // Run any validation blocks:
+            if(hasValidations){
+                // TODO - implement!!!
+            }
+
+            // Add the revision to the database:
+            int status;
+            boolean isWinner;
+            {
+                Log.e(TAG, "[putDoc()] before doc.insert() newRevID => " + newRevID);
+                Log.e(TAG, "[putDoc()] before doc.insert() json => " + json);
+
+                // TODO - add new RevIDBuffer(String)
+                // TODO - add RevTree.insert(String, String, boolean, boolean, RevID arg4, boolean)
+                com.couchbase.cbforest.Revision fdbRev = doc.insert(new RevIDBuffer(new Slice(newRevID)),
+                        new Slice(json),
+                        deleting,
+                        (putRev.getAttachments() != null),
+                        revNode,
+                        allowConflict);
+                status = doc.getLatestHttpStatus();
+                if(fdbRev!=null)
+                    putRev.setSequence(fdbRev.getSequence().longValue());
+                // TODO - implement status check code
+                // TODO - is address compare good enough??
+                isWinner = fdbRev.isSameAddress(doc.currentRevision());
+
+                Log.w(TAG, "[putDoc()] after doc.insert() doc.encode() => " + fdbRev.getRevID().getBuf());
+                Log.w(TAG, "[putDoc()] after doc.insert() doc.encode() => " + doc.encode().getBuf());
+                Log.w(TAG, "[putDoc()] after doc.insert() doc.getRevID() => " + doc.getRevID().getBuf());
+            }
+
+
+
+            // prune call will invalidate fdbRev ptr, so let it go out of scope
+
+            doc.prune(maxRevTreeDepth);
+            doc.save(forestTransaction);
+
+            Log.e(TAG, "[putDoc()] doc.getDocID() => " + doc.getDocID().getBuf());
+
+            // TODO - implement doc.dump()
+
+            // TODO - !!!! change With new Revision !!!!!
+
+            // Success!
+            if(deleting) {
+                resultStatus.setCode(Status.OK);
+            }
+            else {
+                resultStatus.setCode(Status.CREATED);
+            }
         }
         finally {
             endTransaction(resultStatus.isSuccessful());
         }
 
+        // TODO - status check
 
+        // TODO - logging
 
+        // Epilogue: A change notification is sent:
+        if(change!=null)
+            notifyChange(change);
 
-
-        return null;
+        return putRev;
     }
 
     public void forceInsert(RevisionInternal rev, List<String> revHistory, URL source) throws CouchbaseLiteException {
@@ -787,6 +902,7 @@ public class DatabaseCBForest implements Database {
 
     }
 
+    // TODO not used for Forestdb
     public int pruneRevsToMaxDepth(int maxDepth) throws CouchbaseLiteException {
         return 0;
     }
@@ -809,5 +925,71 @@ public class DatabaseCBForest implements Database {
 
     public PersistentCookieStore getPersistentCookieStore() {
         return null;
+    }
+
+
+
+
+    // SAME
+    @InterfaceAudience.Private
+    private void postChangeNotifications() {
+        // This is a 'while' instead of an 'if' because when we finish posting notifications, there
+        // might be new ones that have arrived as a result of notification handlers making document
+        // changes of their own (the replicator manager will do this.) So we need to check again.
+        while (transactionLevel == 0 && isOpen() && !postingChangeNotifications
+                && changesToNotify.size() > 0)
+        {
+
+            try {
+                postingChangeNotifications = true; // Disallow re-entrant calls
+
+                List<DocumentChange> outgoingChanges = new ArrayList<DocumentChange>();
+                outgoingChanges.addAll(changesToNotify);
+                changesToNotify.clear();
+
+                // TODO: change this to match iOS and call cachedDocumentWithID
+                /*
+                BOOL external = NO;
+                for (CBLDatabaseChange* change in changes) {
+                    // Notify the corresponding instantiated CBLDocument object (if any):
+                    [[self _cachedDocumentWithID: change.documentID] revisionAdded: change];
+                    if (change.source != nil)
+                        external = YES;
+                }
+                */
+
+                boolean isExternal = false;
+                for (DocumentChange change: outgoingChanges) {
+                    Document document = getDocument(change.getDocumentId());
+                    document.revisionAdded(change);
+                    if (change.getSourceUrl() != null) {
+                        isExternal = true;
+                    }
+                }
+
+                ChangeEvent changeEvent = new ChangeEvent(this, isExternal, outgoingChanges);
+
+                for (ChangeListener changeListener : changeListeners) {
+                    changeListener.changed(changeEvent);
+                }
+
+            } catch (Exception e) {
+                Log.e(Database.TAG, this + " got exception posting change notifications", e);
+            } finally {
+                postingChangeNotifications = false;
+            }
+
+        }
+
+
+    }
+    // SAME
+    private void notifyChange(DocumentChange documentChange) {
+        if (changesToNotify == null) {
+            changesToNotify = new ArrayList<DocumentChange>();
+        }
+        changesToNotify.add(documentChange);
+
+        postChangeNotifications();
     }
 }
