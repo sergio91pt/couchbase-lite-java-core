@@ -1,8 +1,9 @@
 package com.couchbase.lite;
 
-import com.couchbase.cbforest.RevIDBuffer;
-import com.couchbase.cbforest.Slice;
-import com.couchbase.cbforest.VersionedDocument;
+
+import com.couchbase.lite.cbforest.RevIDBuffer;
+import com.couchbase.lite.cbforest.Slice;
+import com.couchbase.lite.cbforest.VersionedDocument;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.util.Log;
@@ -22,7 +23,7 @@ public class ForestBridge {
     /**
      * static NSData* dataOfNode(const Revision* rev)
      */
-    public static byte[] dataOfNode(com.couchbase.cbforest.Revision rev){
+    public static byte[] dataOfNode(com.couchbase.lite.cbforest.Revision rev){
         byte[] body = rev.getBody().getBuf();
         if(body!=null)
             return body;
@@ -39,7 +40,7 @@ public class ForestBridge {
         // If caller wants no body and no metadata props, this is a no-op:
         if(options.equals(EnumSet.of(Database.TDContentOptions.TDNoBody)))
             return true;
-        com.couchbase.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(rev.getRevId().getBytes())));
+        com.couchbase.lite.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(rev.getRevId().getBytes())));
         if(revNode == null)
             return false;
 
@@ -70,7 +71,7 @@ public class ForestBridge {
         String docID = new String(doc.getDocID().getBuf());
         if(doc.revsAvailable()){
             //com.couchbase.cbforest.Revision revNode = doc.get(new RevID(revID));
-            com.couchbase.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(revID.getBytes())));
+            com.couchbase.lite.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(revID.getBytes())));
             if(revNode == null) {
                 return null;
             }
@@ -97,7 +98,7 @@ public class ForestBridge {
      *        Instead of downcast, add VersionedDocument parameter
      */
     @InterfaceAudience.Private
-    public static void addContentProperties(EnumSet<Database.TDContentOptions> options, Map<String,Object> dst, com.couchbase.cbforest.Revision rev, VersionedDocument doc) {
+    public static void addContentProperties(EnumSet<Database.TDContentOptions> options, Map<String,Object> dst, com.couchbase.lite.cbforest.Revision rev, VersionedDocument doc) {
 
         String revID = new String(rev.getRevID().getBuf());
         assert(revID!=null);

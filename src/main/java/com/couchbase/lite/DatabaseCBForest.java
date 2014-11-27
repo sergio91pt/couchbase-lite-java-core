@@ -1,11 +1,13 @@
 package com.couchbase.lite;
 
-import com.couchbase.cbforest.OpenFlags;
-import com.couchbase.cbforest.RevID;
-import com.couchbase.cbforest.RevIDBuffer;
-import com.couchbase.cbforest.Slice;
-import com.couchbase.cbforest.Transaction;
-import com.couchbase.cbforest.VersionedDocument;
+
+import com.couchbase.lite.cbforest.OpenFlags;
+import com.couchbase.lite.cbforest.RevID;
+import com.couchbase.lite.cbforest.RevIDBuffer;
+import com.couchbase.lite.cbforest.Slice;
+import com.couchbase.lite.cbforest.Transaction;
+import com.couchbase.lite.cbforest.VersionedDocument;
+import com.couchbase.lite.cbforest.cbforest;
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -72,9 +74,9 @@ public class DatabaseCBForest implements Database {
     private int maxRevTreeDepth = DEFAULT_MAX_REVS;
 
     // CBForest
-    com.couchbase.cbforest.Database database;
+    com.couchbase.lite.cbforest.Database database;
     //com.couchbase.cbforest.Transaction transaction;
-    com.couchbase.cbforest.Transaction forestTransaction;
+    Transaction forestTransaction;
 
     public DatabaseCBForest(String path, Manager manager) {
         assert(new File(path).isAbsolute()); //path must be absolute
@@ -90,7 +92,7 @@ public class DatabaseCBForest implements Database {
 
     }
     public boolean open() {
-        database = new com.couchbase.cbforest.Database(path, OpenFlags.FDB_OPEN_FLAG_CREATE, com.couchbase.cbforest.Database.defaultConfig());
+        database = new com.couchbase.lite.cbforest.Database(path, OpenFlags.FDB_OPEN_FLAG_CREATE, com.couchbase.lite.cbforest.Database.defaultConfig());
         open = true;
         return open;
     }
@@ -372,7 +374,7 @@ public class DatabaseCBForest implements Database {
 
         String revID = inRevID;
         if(revID == null){
-            com.couchbase.cbforest.Revision rev = doc.currentRevision();
+            com.couchbase.lite.cbforest.Revision rev = doc.currentRevision();
             if(rev == null || rev.isDeleted()) {
                 //throw new CouchbaseLiteException(Status.DELETED);
                 return null;
@@ -699,7 +701,7 @@ public class DatabaseCBForest implements Database {
 
         beginTransaction();
         try{
-            com.couchbase.cbforest.Document rawDoc = new com.couchbase.cbforest.Document();
+            com.couchbase.lite.cbforest.Document rawDoc = new com.couchbase.lite.cbforest.Document();
             if(docID != null && !docID.isEmpty()){
                 // Read the doc from the database:
                 rawDoc.setKey(new Slice(docID.getBytes()));
@@ -713,7 +715,7 @@ public class DatabaseCBForest implements Database {
 
             // Parse the document revision tree:
             VersionedDocument doc = new VersionedDocument(database, rawDoc);
-            com.couchbase.cbforest.Revision revNode;
+            com.couchbase.lite.cbforest.Revision revNode;
 
             if(inPrevRevID != null){
                 // Updating an existing revision; make sure it exists and is a leaf:
@@ -772,7 +774,7 @@ public class DatabaseCBForest implements Database {
             {
                 // TODO - add new RevIDBuffer(String)
                 // TODO - add RevTree.insert(String, String, boolean, boolean, RevID arg4, boolean)
-                com.couchbase.cbforest.Revision fdbRev = doc.insert(new RevIDBuffer(new Slice(newRevID.getBytes())),
+                com.couchbase.lite.cbforest.Revision fdbRev = doc.insert(new RevIDBuffer(new Slice(newRevID.getBytes())),
                         new Slice(json.getBytes()),
                         deleting,
                         (putRev.getAttachments() != null),
