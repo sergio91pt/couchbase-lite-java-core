@@ -44,15 +44,11 @@ public class Slice {
     this(cbforestJNI.new_Slice__SWIG_0(), true);
   }
 
-  public Slice(String arg0, long arg1) {
-    this(cbforestJNI.new_Slice__SWIG_1(arg0, arg1), true);
+  public Slice(byte[] b) {
+    this(cbforestJNI.new_Slice__SWIG_1(b), true);
   }
 
-  public Slice(String arg0) {
-    this(cbforestJNI.new_Slice__SWIG_2(arg0), true);
-  }
-
-  public String getBuf() {
+  public byte[] getBuf() {
     return cbforestJNI.Slice_getBuf(swigCPtr, this);
   }
 

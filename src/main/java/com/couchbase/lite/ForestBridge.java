@@ -1,6 +1,7 @@
 package com.couchbase.lite;
 
-import com.couchbase.cbforest.RevID;
+import com.couchbase.cbforest.RevIDBuffer;
+import com.couchbase.cbforest.Slice;
 import com.couchbase.cbforest.VersionedDocument;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -16,15 +17,16 @@ import java.util.Map;
  * see CBLForestBridge.h and CBLForestBridge.mm
  */
 public class ForestBridge {
+    public final static String TAG ="ForestBridge";
 
     /**
      * static NSData* dataOfNode(const Revision* rev)
      */
     public static byte[] dataOfNode(com.couchbase.cbforest.Revision rev){
-        String body = rev.getBody().getBuf();
+        byte[] body = rev.getBody().getBuf();
         if(body!=null)
-            return body.getBytes();
-        return rev.readBody().getBuf().getBytes();
+            return body;
+        return rev.readBody().getBuf();
     }
 
     /**
@@ -37,8 +39,7 @@ public class ForestBridge {
         // If caller wants no body and no metadata props, this is a no-op:
         if(options.equals(EnumSet.of(Database.TDContentOptions.TDNoBody)))
             return true;
-
-        com.couchbase.cbforest.Revision revNode = doc.get(new RevID(rev.getRevId()));
+        com.couchbase.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(rev.getRevId().getBytes())));
         if(revNode == null)
             return false;
 
@@ -49,7 +50,7 @@ public class ForestBridge {
 
 
         Map<String,Object> extra = new HashMap<String,Object>();
-        addContentProperties(options, extra, revNode);
+        addContentProperties(options, extra, revNode, doc);
         if(json.length > 0)
            rev.setJson(appendDictToJSON(extra, json));
         else
@@ -66,16 +67,18 @@ public class ForestBridge {
     public static RevisionInternal revisionObjectFromForestDoc(VersionedDocument doc, String revID, EnumSet<Database.TDContentOptions> options){
         RevisionInternal rev = null;
 
-        String docID = doc.getDocID().getBuf();
+        String docID = new String(doc.getDocID().getBuf());
         if(doc.revsAvailable()){
-            com.couchbase.cbforest.Revision revNode = doc.get(new RevID(revID));
-            if(revNode == null)
+            //com.couchbase.cbforest.Revision revNode = doc.get(new RevID(revID));
+            com.couchbase.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(revID.getBytes())));
+            if(revNode == null) {
                 return null;
+            }
             rev = new RevisionInternal(docID, revID, revNode.isDeleted());
             rev.setSequence(revNode.getSequence().longValue());
         }
         else{
-            rev = new RevisionInternal(docID, doc.getRevID().getBuf(), doc.isDeleted());
+            rev = new RevisionInternal(docID, new String(doc.getRevID().getBuf()), doc.isDeleted());
             rev.setSequence(doc.getSequence().longValue());
         }
 
@@ -89,15 +92,18 @@ public class ForestBridge {
      * + (void) addContentProperties: (CBLContentOptions)options
      *                          into: (NSMutableDictionary*)dst
      *                           rev: (const Revision*)rev
+     *
+     *  Note: Unable to downcast from RevTree to VersionedDocument
+     *        Instead of downcast, add VersionedDocument parameter
      */
     @InterfaceAudience.Private
-    public static void addContentProperties(EnumSet<Database.TDContentOptions> options, Map<String,Object> dst, com.couchbase.cbforest.Revision rev) {
+    public static void addContentProperties(EnumSet<Database.TDContentOptions> options, Map<String,Object> dst, com.couchbase.cbforest.Revision rev, VersionedDocument doc) {
 
-        String revID = rev.getRevID().getBuf();
+        String revID = new String(rev.getRevID().getBuf());
         assert(revID!=null);
         // I am not sure if downcast is possible with JNI
-        com.couchbase.cbforest.VersionedDocument doc = (com.couchbase.cbforest.VersionedDocument)rev.getOwner();
-        String docID = doc.getDocID().getBuf();
+        //com.couchbase.cbforest.VersionedDocument doc = (com.couchbase.cbforest.VersionedDocument)rev.getOwner();
+        String docID = new String(doc.getDocID().getBuf());
         dst.put("_id", docID);
         dst.put("_rev", revID);
         if(rev.isDeleted())

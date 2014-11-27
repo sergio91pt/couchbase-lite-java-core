@@ -73,4 +73,12 @@ public class RevID extends Slice {
     return (cPtr == 0) ? null : new Slice(cPtr, false);
   }
 
+  public byte[] getBuf() {
+    return cbforestJNI.RevID_getBuf(swigCPtr, this);
+  }
+
+  public String toString() {
+    return cbforestJNI.RevID_toString(swigCPtr, this);
+  }
+
 }

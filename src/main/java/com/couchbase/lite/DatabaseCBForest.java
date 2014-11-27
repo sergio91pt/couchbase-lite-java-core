@@ -1,6 +1,11 @@
 package com.couchbase.lite;
 
-import com.couchbase.cbforest.*;
+import com.couchbase.cbforest.OpenFlags;
+import com.couchbase.cbforest.RevID;
+import com.couchbase.cbforest.RevIDBuffer;
+import com.couchbase.cbforest.Slice;
+import com.couchbase.cbforest.Transaction;
+import com.couchbase.cbforest.VersionedDocument;
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -306,8 +311,6 @@ public class DatabaseCBForest implements Database {
     public boolean endTransaction(boolean commit) {
 
         assert(transactionLevel > 0);
-        Log.w(TAG, "endTransaction() commit => " + commit);
-
         if(commit) {
             Log.i(TAG, "%s Committing transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
             // ~Transaction() -> db.endTransaction() -> fdb_end_transaction
@@ -361,8 +364,7 @@ public class DatabaseCBForest implements Database {
         RevisionInternal result = null;
 
         // TODO: add VersionDocument(Database, String)
-        VersionedDocument doc = new VersionedDocument(database, new Slice(docID));
-        Log.i(TAG, "[getDocumentWithIDAndRev()] docID => "+docID + ", doc.exists() => "+doc.exists());
+        VersionedDocument doc = new VersionedDocument(database, new Slice(docID.getBytes()));
         if(!doc.exists()) {
             //throw new CouchbaseLiteException(Status.NOT_FOUND);
             return null;
@@ -378,6 +380,7 @@ public class DatabaseCBForest implements Database {
             // TODO: add String getRevID()
             // TODO: revID is something wrong!!!!!
             //revID = rev.getRevID().getBuf();
+            revID =  new String(rev.getRevID().expanded().getBuf());
         }
 
         result = ForestBridge.revisionObjectFromForestDoc(doc, revID, options);
@@ -699,13 +702,13 @@ public class DatabaseCBForest implements Database {
             com.couchbase.cbforest.Document rawDoc = new com.couchbase.cbforest.Document();
             if(docID != null && !docID.isEmpty()){
                 // Read the doc from the database:
-                rawDoc.setKey(new Slice(docID));
+                rawDoc.setKey(new Slice(docID.getBytes()));
                 database.read(rawDoc);
             }
             else{
                 // Create new doc ID, and don't bother to read it since it's a new doc:
                 docID = Misc.TDCreateUUID();
-                rawDoc.setKey(new Slice(docID));
+                rawDoc.setKey(new Slice(docID.getBytes()));
             }
 
             // Parse the document revision tree:
@@ -736,7 +739,7 @@ public class DatabaseCBForest implements Database {
                     if(revNode.isDeleted()) {
                         // New rev will be child of the tombstone:
                         // (T0D0: Write a horror novel called "Child Of The Tombstone"!)
-                        prevRevID = revNode.getRevID().getBuf();
+                        prevRevID = new String(revNode.getRevID().getBuf());
                     }else {
                         throw new CouchbaseLiteException(Status.CONFLICT);
                     }
@@ -767,13 +770,10 @@ public class DatabaseCBForest implements Database {
             int status;
             boolean isWinner;
             {
-                Log.e(TAG, "[putDoc()] before doc.insert() newRevID => " + newRevID);
-                Log.e(TAG, "[putDoc()] before doc.insert() json => " + json);
-
                 // TODO - add new RevIDBuffer(String)
                 // TODO - add RevTree.insert(String, String, boolean, boolean, RevID arg4, boolean)
-                com.couchbase.cbforest.Revision fdbRev = doc.insert(new RevIDBuffer(new Slice(newRevID)),
-                        new Slice(json),
+                com.couchbase.cbforest.Revision fdbRev = doc.insert(new RevIDBuffer(new Slice(newRevID.getBytes())),
+                        new Slice(json.getBytes()),
                         deleting,
                         (putRev.getAttachments() != null),
                         revNode,
@@ -784,20 +784,12 @@ public class DatabaseCBForest implements Database {
                 // TODO - implement status check code
                 // TODO - is address compare good enough??
                 isWinner = fdbRev.isSameAddress(doc.currentRevision());
-
-                Log.w(TAG, "[putDoc()] after doc.insert() doc.encode() => " + fdbRev.getRevID().getBuf());
-                Log.w(TAG, "[putDoc()] after doc.insert() doc.encode() => " + doc.encode().getBuf());
-                Log.w(TAG, "[putDoc()] after doc.insert() doc.getRevID() => " + doc.getRevID().getBuf());
             }
-
-
 
             // prune call will invalidate fdbRev ptr, so let it go out of scope
 
             doc.prune(maxRevTreeDepth);
             doc.save(forestTransaction);
-
-            Log.e(TAG, "[putDoc()] doc.getDocID() => " + doc.getDocID().getBuf());
 
             // TODO - implement doc.dump()
 

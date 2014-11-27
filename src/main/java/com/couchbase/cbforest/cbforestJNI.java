@@ -107,10 +107,9 @@ public class cbforestJNI {
   public final static native void delete_Config(long jarg1);
   public final static native long Slice_Null_get();
   public final static native long new_Slice__SWIG_0();
-  public final static native long new_Slice__SWIG_1(String jarg1, long jarg2);
-  public final static native long new_Slice__SWIG_2(String jarg1);
+  public final static native long new_Slice__SWIG_1(byte[] jarg1);
   public final static native void delete_Slice(long jarg1);
-  public final static native String Slice_getBuf(long jarg1, Slice jarg1_);
+  public final static native byte[] Slice_getBuf(long jarg1, Slice jarg1_);
   public final static native int Slice_compare(long jarg1, Slice jarg1_, long jarg2, Slice jarg2_);
   public final static native long Slice_copy(long jarg1, Slice jarg1_);
   public final static native void Slice_free(long jarg1, Slice jarg1_);
@@ -212,6 +211,8 @@ public class cbforestJNI {
   public final static native boolean RevID_expandInto(long jarg1, RevID jarg1_, long jarg2, Slice jarg2_);
   public final static native long RevID_generation(long jarg1, RevID jarg1_);
   public final static native long RevID_digest(long jarg1, RevID jarg1_);
+  public final static native byte[] RevID_getBuf(long jarg1, RevID jarg1_);
+  public final static native String RevID_toString(long jarg1, RevID jarg1_);
   public final static native long new_RevIDBuffer__SWIG_0();
   public final static native long new_RevIDBuffer__SWIG_1(long jarg1, Slice jarg1_);
   public final static native void delete_RevIDBuffer(long jarg1);
