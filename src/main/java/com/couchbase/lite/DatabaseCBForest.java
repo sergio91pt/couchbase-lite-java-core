@@ -2,12 +2,10 @@ package com.couchbase.lite;
 
 
 import com.couchbase.lite.cbforest.OpenFlags;
-import com.couchbase.lite.cbforest.RevID;
 import com.couchbase.lite.cbforest.RevIDBuffer;
 import com.couchbase.lite.cbforest.Slice;
 import com.couchbase.lite.cbforest.Transaction;
 import com.couchbase.lite.cbforest.VersionedDocument;
-import com.couchbase.lite.cbforest.cbforest;
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
@@ -720,7 +718,10 @@ public class DatabaseCBForest implements Database {
             if(inPrevRevID != null){
                 // Updating an existing revision; make sure it exists and is a leaf:
                 // TODO -> add VersionDocument.get(String revID)
-                revNode = doc.get(new RevID(inPrevRevID));
+                //      -> or Efficiently pass RevID to VersionDocument.get(RevID)
+                //revNode = doc.get(new RevID(inPrevRevID));
+                Log.w(TAG, "inPrevRevID => " + inPrevRevID);
+                revNode = doc.get(new RevIDBuffer(new Slice(inPrevRevID.getBytes())));
                 if(revNode == null)
                     throw new CouchbaseLiteException(Status.NOT_FOUND);
                 else if(!allowConflict && !revNode.isLeaf())
@@ -754,6 +755,8 @@ public class DatabaseCBForest implements Database {
             String newRevID = generateRevIDForJSON(json.getBytes(), deleting, prevRevID);
             if(newRevID == null)
                 throw new CouchbaseLiteException(Status.BAD_ID); // invalid previous revID (no numeric prefix)
+
+            Log.w(TAG, "[putDoc()] newRevID => "+newRevID);
 
             putRev = new RevisionInternal(docID, newRevID, deleting);
 
