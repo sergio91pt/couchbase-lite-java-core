@@ -618,9 +618,11 @@ public class DatabaseCBForest implements Database {
         return new byte[0];
     }
 
+    // TODO: No longer used?
     public void notifyChange(RevisionInternal rev, RevisionInternal winningRev, URL source, boolean inConflict) {
-
     }
+
+
 
     public long insertRevision(RevisionInternal rev, long docNumericID, long parentSequence, boolean current, boolean hasAttachments, byte[] data) {
         return 0;
@@ -659,7 +661,7 @@ public class DatabaseCBForest implements Database {
             deleting = true;
         }
 
-        Log.i(TAG, "PUT _id="+docID+", _rev="+prevRevID+", _deleted=" + deleting + ", allowConflict=" + allowConflict);
+        Log.w(TAG, "[putDoc()] _id="+docID+", _rev="+prevRevID+", _deleted=" + deleting + ", allowConflict=" + allowConflict);
 
         if( (prevRevID != null && docID == null) ||
             (deleting && docID == null) ||
@@ -695,7 +697,7 @@ public class DatabaseCBForest implements Database {
         }
 
 
-        Log.i(TAG, "json => " + json);
+        Log.w(TAG, "[putDoc()] json => " + json);
 
         beginTransaction();
         try{
@@ -720,7 +722,7 @@ public class DatabaseCBForest implements Database {
                 // TODO -> add VersionDocument.get(String revID)
                 //      -> or Efficiently pass RevID to VersionDocument.get(RevID)
                 //revNode = doc.get(new RevID(inPrevRevID));
-                Log.w(TAG, "inPrevRevID => " + inPrevRevID);
+                Log.w(TAG, "[putDoc()] inPrevRevID => " + inPrevRevID);
                 revNode = doc.get(new RevIDBuffer(new Slice(inPrevRevID.getBytes())));
                 if(revNode == null)
                     throw new CouchbaseLiteException(Status.NOT_FOUND);
@@ -796,9 +798,12 @@ public class DatabaseCBForest implements Database {
             doc.prune(maxRevTreeDepth);
             doc.save(forestTransaction);
 
+            Log.w(TAG, "[putDoc()] doc.currentRevision.getRevID().toString() => " + doc.currentRevision().getRevID().toString());
+
             // TODO - implement doc.dump()
 
             // TODO - !!!! change With new Revision !!!!!
+            change = changeWithNewRevision(putRev, isWinner, doc, null);
 
             // Success!
             if(deleting) {
@@ -817,8 +822,11 @@ public class DatabaseCBForest implements Database {
         // TODO - logging
 
         // Epilogue: A change notification is sent:
-        if(change!=null)
+        if(change != null)
             notifyChange(change);
+
+        Log.w(TAG, "[putDoc()] putRev => " + putRev);
+        Log.w(TAG, "[putDoc()] json => " + json);
 
         return putRev;
     }
@@ -904,8 +912,9 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
+    // TODO - SAME
     public boolean isOpen() {
-        return false;
+        return open;
     }
 
     public void addReplication(Replication replication) {
@@ -980,6 +989,20 @@ public class DatabaseCBForest implements Database {
 
 
     }
+    private DocumentChange changeWithNewRevision(RevisionInternal inRev, boolean isWinningRev,
+                                                 VersionedDocument doc, URL source){
+
+        RevisionInternal winningRev = inRev;
+        if(isWinningRev == false){
+            com.couchbase.lite.cbforest.Revision winningRevision = doc.currentRevision();
+            String winningRevID = winningRevision.getRevID().toString();
+            if(!winningRevID.equals(inRev.getRevId().toString())){
+                winningRev = new RevisionInternal(inRev.getDocId(), winningRevID, winningRevision.isDeleted());
+            }
+        }
+        return new DocumentChange(inRev, winningRev, doc.hasConflict(), source);
+    }
+
     // SAME
     private void notifyChange(DocumentChange documentChange) {
         if (changesToNotify == null) {
