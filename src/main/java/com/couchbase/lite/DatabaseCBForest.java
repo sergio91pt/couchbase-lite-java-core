@@ -42,7 +42,7 @@ public class DatabaseCBForest implements Database {
     static {
         try{
             System.loadLibrary("cbforest");
-            Log.i("DatabaseCBForest", "load libcbforest OK !!!");
+            Log.w("DatabaseCBForest", "load libcbforest OK !!!");
         }
         catch(Exception e){
             Log.e("DatabaseCBForest", "Failed to load libcbforest !!!");
