@@ -406,12 +406,48 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
+    // TODO: Do we need this?
     public RevisionList getAllRevisionsOfDocumentID(String docId, long docNumericID, boolean onlyCurrent) {
         return null;
     }
 
+    /**
+     * CBLDatabase+Internal.m
+     * - (CBL_RevisionList*) getAllRevisionsOfDocumentID: (NSString*)docID
+     *                                       onlyCurrent: (BOOL)onlyCurrent
+     */
     public RevisionList getAllRevisionsOfDocumentID(String docId, boolean onlyCurrent) {
-        return null;
+        // TODO: add VersionDocument(KeyStore, String)
+        VersionedDocument doc = new VersionedDocument(database, new Slice(docId.getBytes()));
+        if(!doc.exists()) {
+            // release
+            doc.delete();
+            // TODO: or should throw NOT_FOUND exception
+            return null;
+        }
+
+        RevisionList revs = new RevisionList();
+
+        com.couchbase.lite.cbforest.VectorRevision revNodes = null;
+        if(onlyCurrent){
+            revNodes = doc.currentRevisions();
+        }
+        else{
+            revNodes = doc.allRevisions();
+        }
+
+        for(int i = 0; i < revNodes.size(); i++){
+            com.couchbase.lite.cbforest.Revision revNode = revNodes.get(i);
+            RevisionInternal rev = new RevisionInternal(docId, revNode.getRevID().toString(), revNode.isDeleted());
+            // TODO: not sure if sequence is required?
+            rev.setSequence(revNode.getSequence().longValue());
+            revs.add(rev);
+        }
+
+        // release doc
+        doc.delete();
+
+        return revs;
     }
 
     public List<String> getConflictingRevisionIDsOfDocID(String docID) {
