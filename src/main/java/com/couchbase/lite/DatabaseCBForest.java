@@ -1,6 +1,7 @@
 package com.couchbase.lite;
 
 
+import com.couchbase.lite.cbforest.Config;
 import com.couchbase.lite.cbforest.OpenFlags;
 import com.couchbase.lite.cbforest.RevIDBuffer;
 import com.couchbase.lite.cbforest.Slice;
@@ -51,59 +52,127 @@ public class DatabaseCBForest implements Database {
 
     // Default value for maxRevTreeDepth, the max rev depth to preserve in a prune operation
     private static final int DEFAULT_MAX_REVS = Integer.MAX_VALUE;
-
     public final static String TAG ="DatabaseCBForest";
 
-    private String path = null;
-    private String name = null;
-    private Manager manager = null;
-
-    private boolean open = false;
-    private int transactionLevel = 0;
-
     private Map<String, Validator> validations = null;
-
     final private CopyOnWriteArrayList<ChangeListener> changeListeners;
     private Cache<String, Document> docCache;
     private List<DocumentChange> changesToNotify;
     private boolean postingChangeNotifications = false;
 
-
     private int maxRevTreeDepth = DEFAULT_MAX_REVS;
 
-    // CBForest
-    com.couchbase.lite.cbforest.Database database;
-    //com.couchbase.cbforest.Transaction transaction;
-    Transaction forestTransaction;
+    /**
+     * Variables defined in CBLDatabase+Internal.h
+     */
+    private String dir = null; // NSString* _dir;
+    private String name = null;
+    private Manager manager = null;
+    private com.couchbase.lite.cbforest.Database forest = null;
+    private com.couchbase.lite.cbforest.Transaction forestTransaction = null;
+    private com.couchbase.lite.cbforest.Database localDocs = null;
+    private boolean readOnly = false;
+    private boolean isOpen = false;
+    private int transactionLevel = 0;
+    private long startTime = 0;
 
-    public DatabaseCBForest(String path, Manager manager) {
-        assert(new File(path).isAbsolute()); //path must be absolute
-        this.path = path;
-        this.name = FileDirUtils.getDatabaseNameFromPath(path);
+    /**
+     * in CBLDatabase+Internal.m
+     * - (instancetype) _initWithDir: (NSString*)dirPath
+     *                          name: (NSString*)name
+     *                       manager: (CBLManager*)manager
+     *                      readOnly: (BOOL)readOnly
+     */
+    public DatabaseCBForest(String dirPath, String name, Manager manager, boolean readOnly) {
+        assert(new File(dirPath).isAbsolute()); //path must be absolute
+        this.dir = dirPath;
+        if(name == null || name.isEmpty())
+            this.name = FileDirUtils.getDatabaseNameFromPath(dirPath);
+        else
+            this.name = name;
         this.manager = manager;
+        this.readOnly = readOnly;
         this.changeListeners = new CopyOnWriteArrayList<ChangeListener>();
         this.docCache = new Cache<String, Document>();
-        //this.startTime = System.currentTimeMillis();
+        this.startTime = System.currentTimeMillis();
         this.changesToNotify = new ArrayList<DocumentChange>();
         //this.activeReplicators =  Collections.newSetFromMap(new ConcurrentHashMap());
         //this.allReplicators = Collections.newSetFromMap(new ConcurrentHashMap());
-
     }
+
+    /**
+     * Backward compatibility
+     */
+    public DatabaseCBForest(String path, Manager manager) {
+        this(path, null, manager, false);
+    }
+
+
+    /**
+     * in CBLDatabase+Internal.m
+     * - (NSString*) description
+     */
+    public String toString(){
+        return DatabaseCBForest.class.getName() +"["+ getName() + "]";
+    }
+
+    //TODO: implement details
     public boolean open() {
-        database = new com.couchbase.lite.cbforest.Database(path, OpenFlags.FDB_OPEN_FLAG_CREATE, com.couchbase.lite.cbforest.Database.defaultConfig());
-        open = true;
-        return open;
+        if(isOpen) return true;
+
+        Log.w(TAG, "Opening " + toString());
+
+        // Create the database directory:
+        File dirFile = new File(dir);
+        if(!dirFile.exists())
+            if(!dirFile.mkdir())
+                return false;
+
+        String forestPath = new File(dir, "db.forest").getAbsolutePath();
+        Log.w(TAG, "forestPath => " + forestPath);
+        OpenFlags options = readOnly ? OpenFlags.FDB_OPEN_FLAG_RDONLY : OpenFlags.FDB_OPEN_FLAG_CREATE;
+
+        Config config = com.couchbase.lite.cbforest.Database.defaultConfig();
+        // TODO - update config
+
+        forest = new com.couchbase.lite.cbforest.Database(forestPath,
+                options,
+                config);
+        // TODO - add Log Callback
+
+        // First-time setup:
+        String privateUUID = privateUUID();
+        if(privateUUID == null){
+            setInfo("privateUUID", Misc.TDCreateUUID());
+            setInfo("publicUUID", Misc.TDCreateUUID());
+        }
+
+        // Open attachment store:
+        // TODO - attachment store
+
+        isOpen = true;
+
+        // Listen for _any_ CBLDatabase changing, so I can detect changes made to my database
+        // file by other instances (running on other threads presumably.)
+        // TODO - listener
+
+        return isOpen;
     }
 
     public boolean close() {
-        if(!open) {
+        if(!isOpen) {
             return false;
         }
 
-        if(database != null) {
-            database.delete(); // <- release instance. not delete database
-            database = null;
+        Log.w(TAG, "Closing <" + toString() + "> " + dir);
+
+        if(forest != null) {
+            forest.delete(); // <- release instance. not delete database
+            forest = null;
         }
+
+        isOpen = false;
+        transactionLevel = 0;
 
         return true;
     }
@@ -111,7 +180,7 @@ public class DatabaseCBForest implements Database {
         return name;
     }
     public String getPath() {
-        return path;
+        return dir;
     }
 
     public Manager getManager() {
@@ -123,7 +192,7 @@ public class DatabaseCBForest implements Database {
     }
 
     public long getLastSequenceNumber() {
-        return database.getLastSequence().longValue();
+        return forest.getLastSequence().longValue();
     }
 
     public List<Replication> getAllReplications() {
@@ -131,13 +200,13 @@ public class DatabaseCBForest implements Database {
     }
 
     public void compact() throws CouchbaseLiteException {
-        database.compact();
+        forest.compact();
     }
 
     // NOTE: Same with SQLite?
     public void delete() throws CouchbaseLiteException {
         // delete db file and index
-        database.deleteDatabase();
+        forest.deleteDatabase();
     }
 
     // NOTE: Same with SQLite?
@@ -169,13 +238,8 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public boolean putLocalDocument(String id, Map<String, Object> properties) throws CouchbaseLiteException {
-        return false;
-    }
 
-    public boolean deleteLocalDocument(String id) throws CouchbaseLiteException {
-        return false;
-    }
+
 
     public Query createAllDocumentsQuery() {
         return null;
@@ -302,7 +366,7 @@ public class DatabaseCBForest implements Database {
 
     public boolean beginTransaction() {
         // Transaction() -> db.beginTransaction()
-        forestTransaction = new Transaction(database);
+        forestTransaction = new Transaction(forest);
         transactionLevel++;
         Log.w(TAG, "%s Begin transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
         return true;
@@ -329,13 +393,23 @@ public class DatabaseCBForest implements Database {
         return true;
     }
 
+    /**
+     * CBLDatabase+Internal.m
+     * - (NSString*) privateUUID
+     */
     public String privateUUID() {
-        return null;
+        return getInfo("privateUUID");
     }
 
+    /**
+     * CBLDatabase+Internal.m
+     * - (NSString*) publicUUID
+     */
     public String publicUUID() {
-        return null;
+        return getInfo("publicUUID");
     }
+
+
 
     public byte[] appendDictToJSON(byte[] json, Map<String, Object> dict) {
         return new byte[0];
@@ -364,7 +438,7 @@ public class DatabaseCBForest implements Database {
         RevisionInternal result = null;
 
         // TODO: add VersionDocument(Database, String)
-        VersionedDocument doc = new VersionedDocument(database, new Slice(docID.getBytes()));
+        VersionedDocument doc = new VersionedDocument(forest, new Slice(docID.getBytes()));
         if(!doc.exists()) {
             //throw new CouchbaseLiteException(Status.NOT_FOUND);
             return null;
@@ -418,7 +492,7 @@ public class DatabaseCBForest implements Database {
      */
     public RevisionList getAllRevisionsOfDocumentID(String docId, boolean onlyCurrent) {
         // TODO: add VersionDocument(KeyStore, String)
-        VersionedDocument doc = new VersionedDocument(database, new Slice(docId.getBytes()));
+        VersionedDocument doc = new VersionedDocument(forest, new Slice(docId.getBytes()));
         if(!doc.exists()) {
             // release
             doc.delete();
@@ -705,7 +779,7 @@ public class DatabaseCBForest implements Database {
             throw new CouchbaseLiteException(Status.BAD_REQUEST);
         }
 
-        if(database.isReadOnly()){
+        if(forest.isReadOnly()){
             throw new CouchbaseLiteException(Status.FORBIDDEN);
         }
 
@@ -741,7 +815,7 @@ public class DatabaseCBForest implements Database {
             if(docID != null && !docID.isEmpty()){
                 // Read the doc from the database:
                 rawDoc.setKey(new Slice(docID.getBytes()));
-                database.read(rawDoc);
+                forest.read(rawDoc);
             }
             else{
                 // Create new doc ID, and don't bother to read it since it's a new doc:
@@ -750,7 +824,7 @@ public class DatabaseCBForest implements Database {
             }
 
             // Parse the document revision tree:
-            VersionedDocument doc = new VersionedDocument(database, rawDoc);
+            VersionedDocument doc = new VersionedDocument(forest, rawDoc);
             com.couchbase.lite.cbforest.Revision revNode;
 
             if(inPrevRevID != null){
@@ -907,10 +981,6 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
-    public RevisionInternal putLocalRevision(RevisionInternal revision, String prevRevID) throws CouchbaseLiteException {
-        return null;
-    }
-
     public Query slowQuery(Mapper map) {
         return null;
     }
@@ -927,17 +997,11 @@ public class DatabaseCBForest implements Database {
         return false;
     }
 
-    public RevisionInternal getLocalDocument(String docID, String revID) {
-        return null;
-    }
 
     public long getStartTime() {
         return 0;
     }
 
-    public void deleteLocalDocument(String docID, String revID) throws CouchbaseLiteException {
-
-    }
 
     public void setName(String name) {
 
@@ -948,9 +1012,8 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
-    // TODO - SAME
     public boolean isOpen() {
-        return open;
+        return isOpen;
     }
 
     public void addReplication(Replication replication) {
@@ -1047,5 +1110,150 @@ public class DatabaseCBForest implements Database {
         changesToNotify.add(documentChange);
 
         postChangeNotifications();
+    }
+
+    //================================================================================
+    // CBLDatabase (API/CBLDatabase.m)
+    //================================================================================
+
+    /**
+     * static NSString* makeLocalDocID(NSString* docID)
+     */
+    @InterfaceAudience.Private
+    static String makeLocalDocID(String documentId) {
+        return String.format("_local/%s", documentId);
+    }
+
+    //================================================================================
+    // CBLDatabase+LocalDocs (Database/CBLDAtabase+LocalDocs.m)
+    //================================================================================
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (Database*) localDocs
+     */
+    private com.couchbase.lite.cbforest.Database getLocalDocs(){
+        if(localDocs == null){
+            String path = new File(dir, "local.forest").getAbsolutePath();
+            Config config = com.couchbase.lite.cbforest.Database.defaultConfig();
+            // TODO - update config
+            localDocs = new com.couchbase.lite.cbforest.Database(path,
+                    OpenFlags.FDB_OPEN_FLAG_CREATE,
+                    config);
+            Log.w(TAG, toString() + ": Opened _local docs db");
+        }
+        //closeLocalDocsSoon();
+        return localDocs;
+    }
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (void) closeLocalDocs
+     */
+    private void closeLocalDocs(){
+        if(localDocs!=null){
+            localDocs.delete(); // <- release instance. not delete database
+            localDocs = null;
+            Log.w(TAG, toString() + ": Closed _local docs db");
+        }
+    }
+
+
+    // TODO: need??
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (void) closeLocalDocsSoon
+     */
+    private void closeLocalDocsSoon(){
+    }
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (CBL_Revision*) getLocalDocumentWithID: (NSString*)docID
+     *                               revisionID: (NSString*)revID
+     */
+    @InterfaceAudience.Private
+    public RevisionInternal getLocalDocument(String docID, String revID) {
+        return null;
+    }
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (CBL_Revision*) putLocalRevision: (CBL_Revision*)revision
+     *                     prevRevisionID: (NSString*)prevRevID
+     *                           obeyMVCC: (BOOL)obeyMVCC
+     *                             status: (CBLStatus*)outStatus
+     */
+    @InterfaceAudience.Private
+    public RevisionInternal putLocalRevision(RevisionInternal revision, String prevRevID) throws CouchbaseLiteException {
+        return null;
+    }
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (CBLStatus) deleteLocalDocumentWithID: (NSString*)docID
+     *                              revisionID: (NSString*)revID
+     *                                obeyMVCC: (BOOL)obeyMVCC;
+     */
+    @InterfaceAudience.Private
+    public void deleteLocalDocument(String docID, String revID) throws CouchbaseLiteException {
+    }
+
+
+
+    // pragma mark - INFO FOR KEY:
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (NSString*) infoForKey: (NSString*)key
+     */
+    String getInfo(String key){
+        com.couchbase.lite.cbforest.Document doc = getLocalDocs().get(new Slice(key.getBytes()));
+        byte[] bytes = doc.getBody().getBuf();
+        if(bytes != null)
+            return new String(bytes);
+        else
+            return null;
+    }
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * - (CBLStatus) setInfo: (NSString*)info forKey: (NSString*)key
+     */
+    Status setInfo(String key, String info){
+        Transaction t = new Transaction(getLocalDocs());
+        t.set(new Slice(key.getBytes()), new Slice(info.getBytes()));
+        t.delete();
+        return new Status(Status.OK);
+    }
+
+
+
+
+
+
+
+
+    // TODO: need??
+    /**
+     * Deletes the local document with the given ID.
+     */
+    @InterfaceAudience.Public
+    public boolean deleteLocalDocument(String id) throws CouchbaseLiteException {
+        /*
+        id = makeLocalDocumentId(id);
+        RevisionInternal prevRev = getLocalDocument(id, null);
+        if (prevRev == null) {
+            return false;
+        }
+        deleteLocalDocument(id, prevRev.getRevId());
+        return true;
+        */
+        return false;
+    }
+    // TODO: need??
+    @InterfaceAudience.Public
+    public boolean putLocalDocument(String id, Map<String, Object> properties) throws CouchbaseLiteException {
+        return false;
     }
 }
