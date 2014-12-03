@@ -2,6 +2,8 @@ package com.couchbase.lite;
 
 
 import com.couchbase.lite.cbforest.Config;
+import com.couchbase.lite.cbforest.ContentOptions;
+import com.couchbase.lite.cbforest.DocEnumerator;
 import com.couchbase.lite.cbforest.OpenFlags;
 import com.couchbase.lite.cbforest.RevIDBuffer;
 import com.couchbase.lite.cbforest.Slice;
@@ -21,15 +23,19 @@ import com.couchbase.lite.util.Utils;
 
 import java.io.File;
 import java.io.InputStream;
+import java.math.BigInteger;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
@@ -75,6 +81,24 @@ public class DatabaseCBForest implements Database {
     private boolean isOpen = false;
     private int transactionLevel = 0;
     private long startTime = 0;
+
+
+
+    private static final Set<String> KNOWN_SPECIAL_KEYS;
+
+    static {
+        KNOWN_SPECIAL_KEYS = new HashSet<String>();
+        KNOWN_SPECIAL_KEYS.add("_id");
+        KNOWN_SPECIAL_KEYS.add("_rev");
+        KNOWN_SPECIAL_KEYS.add("_attachments");
+        KNOWN_SPECIAL_KEYS.add("_deleted");
+        KNOWN_SPECIAL_KEYS.add("_revisions");
+        KNOWN_SPECIAL_KEYS.add("_revs_info");
+        KNOWN_SPECIAL_KEYS.add("_conflicts");
+        KNOWN_SPECIAL_KEYS.add("_deleted_conflicts");
+        KNOWN_SPECIAL_KEYS.add("_local_seq");
+        KNOWN_SPECIAL_KEYS.add("_removed");
+    }
 
     /**
      * in CBLDatabase+Internal.m
@@ -297,30 +321,31 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    // same?
+    // NOTE: Same with SQLite?
     @InterfaceAudience.Public
     public void addChangeListener(ChangeListener listener) {
         changeListeners.addIfAbsent(listener);
     }
 
-    // same?
+    // NOTE: Same with SQLite?
     @InterfaceAudience.Public
     public void removeChangeListener(ChangeListener listener) {
         changeListeners.remove(listener);
     }
 
+    // NOTE: Same with SQLite?
     public int getMaxRevTreeDepth() {
         return maxRevTreeDepth;
     }
-
+    // NOTE: Same with SQLite?
     public void setMaxRevTreeDepth(int maxRevTreeDepth) {
         this.maxRevTreeDepth = maxRevTreeDepth;
     }
-
+    // NOTE: Same with SQLite?
     public Document getCachedDocument(String documentID) {
         return docCache.get(documentID);
     }
-
+    // NOTE: Same with SQLite?
     public void clearDocumentCache() {
         docCache.clear();
     }
@@ -536,24 +561,115 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
+    @InterfaceAudience.Private
     public List<RevisionInternal> getRevisionHistory(RevisionInternal rev) {
-        return null;
+        String docId = rev.getDocId();
+        String revId = rev.getRevId();
+        VersionedDocument doc = new VersionedDocument(forest, new Slice(docId.getBytes()));
+        com.couchbase.lite.cbforest.Revision revision = doc.get(new RevIDBuffer(new Slice(revId.getBytes())));
+        List<RevisionInternal> history = ForestBridge.getRevisionHistory(docId, revision);
+        doc.delete();
+        return history;
     }
 
+    /**
+     * Returns the revision history as a _revisions dictionary, as returned by the REST API's ?revs=true option.
+     */
+    @InterfaceAudience.Private
     public Map<String, Object> getRevisionHistoryDict(RevisionInternal rev) {
-        return null;
+        return DatabaseUtil.makeRevisionHistoryDict(getRevisionHistory(rev));
     }
 
+    /**
+     * Returns the revision history as a _revisions dictionary, as returned by the REST API's ?revs=true option.
+     *
+     * in CBLDatabase+Internal.m
+     * - (NSDictionary*) getRevisionHistoryDict: (CBL_Revision*)rev
+     *                        startingFromAnyOf: (NSArray*)ancestorRevIDs
+     */
+    @InterfaceAudience.Private
     public Map<String, Object> getRevisionHistoryDictStartingFromAnyAncestor(RevisionInternal rev, List<String> ancestorRevIDs) {
-        return null;
+        String docId = rev.getDocId();
+        String revId = rev.getRevId();
+        VersionedDocument doc = new VersionedDocument(forest, new Slice(docId.getBytes()));
+        com.couchbase.lite.cbforest.Revision revision = doc.get(new RevIDBuffer(new Slice(revId.getBytes())));
+        Map<String, Object> history = ForestBridge.getRevisionHistoryDictStartingFromAnyAncestor(docId, revision, ancestorRevIDs);
+        doc.delete();
+        return history;
     }
 
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
     public RevisionList changesSince(long lastSeq, ChangesOptions options, ReplicationFilter filter) {
-        return null;
+        return changesSince(lastSeq, options, filter, null);
+    }
+    /**
+     * in CBLDatabase+Internal.m
+     * - (CBL_RevisionList*) changesSinceSequence: (SequenceNumber)lastSequence
+     *                                    options: (const CBLChangesOptions*)options
+     *                                     filter: (CBLFilterBlock)filter
+     *                                     params: (NSDictionary*)filterParams
+     *                                     status: (CBLStatus*)outStatus
+     */
+    @InterfaceAudience.Private
+    public RevisionList changesSince(long lastSeq, ChangesOptions options, ReplicationFilter filter, Map<String, Object> filterParams) {
+        // http://wiki.apache.org/couchdb/HTTP_database_API#Changes
+        // Translate options to ForestDB:
+        if(options == null) {
+            options = new ChangesOptions();
+        }
+        DocEnumerator.Options forestOPts = DocEnumerator.Options.getDef();
+        forestOPts.setLimit(options.getLimit());
+        forestOPts.setInclusiveEnd(true);
+        forestOPts.setIncludeDeleted(false);
+        boolean includeDocs = (options.isIncludeDocs() || options.isIncludeConflicts() || filter != null);
+        if(!includeDocs) {
+            forestOPts.setContentOption(ContentOptions.kMetaOnly);
+        }
+        EnumSet<TDContentOptions> contentOptions = EnumSet.noneOf(TDContentOptions.class);
+        contentOptions.add(TDContentOptions.TDNoBody);
+        if(includeDocs||filter != null)
+            contentOptions = options.getContentOptions();
+
+        RevisionList changes = new RevisionList();
+        // TODO: DocEnumerator -> use long instead of BigInteger
+        DocEnumerator itr = new DocEnumerator(forest, BigInteger.valueOf(lastSeq), BigInteger.valueOf(Long.MAX_VALUE), forestOPts);
+        do {
+            VersionedDocument doc = new VersionedDocument(forest, itr.doc());
+            List<String> revIDs = null;
+            if(options.isIncludeConflicts()) {
+                revIDs = ForestBridge.getCurrentRevisionIDs(doc);
+            }
+            else {
+                revIDs = new ArrayList<String>();
+                revIDs.add(doc.getRevID().toString());
+            }
+            for(String revID : revIDs){
+                RevisionInternal rev = ForestBridge.revisionObjectFromForestDoc(doc, revID, contentOptions);
+                if (runFilter(filter, filterParams, rev)) {
+                    changes.add(rev);
+                }
+            }
+
+        }while(itr.next());
+        return changes;
     }
 
-    public boolean runFilter(ReplicationFilter filter, Map<String, Object> paramsIgnored, RevisionInternal rev) {
-        return false;
+    /**
+     * in CBLDatabase+Internal.m
+     * - (BOOL) runFilter: (CBLFilterBlock)filter
+     *             params: (NSDictionary*)filterParams
+     *         onRevision: (CBL_Revision*)rev
+     */
+    @InterfaceAudience.Private
+    public boolean runFilter(ReplicationFilter filter, Map<String, Object> filterParams, RevisionInternal rev) {
+        if (filter == null) {
+            return true;
+        }
+        SavedRevision publicRev = new SavedRevision(this, rev);
+        return filter.filter(publicRev, filterParams);
     }
 
     public String getDesignDocFunction(String fnName, String key, List<String> outLanguageList) {
@@ -724,8 +840,46 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
+    // TODO: Same??
     public byte[] encodeDocumentJSON(RevisionInternal rev) {
-        return new byte[0];
+        Map<String,Object> origProps = rev.getProperties();
+        if(origProps == null) {
+            return null;
+        }
+
+        List<String> specialKeysToLeave = Arrays.asList(
+                "_removed",
+                "_replication_id",
+                "_replication_state",
+                "_replication_state_time");
+
+        // Don't allow any "_"-prefixed keys. Known ones we'll ignore, unknown ones are an error.
+        Map<String,Object> properties = new HashMap<String,Object>(origProps.size());
+        for (String key : origProps.keySet()) {
+            boolean shouldAdd = false;
+            if(key.startsWith("_")) {
+                if(!KNOWN_SPECIAL_KEYS.contains(key)) {
+                    Log.e(TAG, "Database: Invalid top-level key '%s' in document to be inserted", key);
+                    return null;
+                }
+                if (specialKeysToLeave.contains(key)) {
+                    shouldAdd = true;
+                }
+            } else {
+                shouldAdd = true;
+            }
+            if (shouldAdd) {
+                properties.put(key, origProps.get(key));
+            }
+        }
+
+        byte[] json = null;
+        try {
+            json = Manager.getObjectMapper().writeValueAsBytes(properties);
+        } catch (Exception e) {
+            Log.e(Database.TAG, "Error serializing " + rev + " to JSON", e);
+        }
+        return json;
     }
 
     // TODO: No longer used?
@@ -739,16 +893,19 @@ public class DatabaseCBForest implements Database {
     }
 
     // NOTE: Same with SQLite?
+    // Backward compatibility
     public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, Status resultStatus) throws CouchbaseLiteException {
         return putRevision(rev, prevRevId, false, resultStatus);
     }
 
     // NOTE: Same with SQLite?
+    // Backward compatibility
     public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, boolean allowConflict) throws CouchbaseLiteException {
         Status ignoredStatus = new Status();
         return putRevision(rev, prevRevId, allowConflict, ignoredStatus);
     }
 
+    // Backward compatibility
     public RevisionInternal putRevision(RevisionInternal putRev, String inPrevRevID, boolean allowConflict, Status outStatus) throws CouchbaseLiteException{
         return putDoc(putRev.getDocId(), putRev.getProperties(), inPrevRevID, allowConflict, outStatus);
     }
@@ -997,14 +1154,17 @@ public class DatabaseCBForest implements Database {
         return false;
     }
 
-
+    @InterfaceAudience.Private
     public long getStartTime() {
-        return 0;
+        return this.startTime;
     }
 
-
+    /**
+     * Set the database's name.
+     */
+    @InterfaceAudience.Private
     public void setName(String name) {
-
+        this.name = name;
     }
 
     // TODO not used for Forestdb
@@ -1012,6 +1172,10 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
+    /**
+     * Is the database open?
+     */
+    @InterfaceAudience.Private
     public boolean isOpen() {
         return isOpen;
     }
@@ -1158,13 +1322,33 @@ public class DatabaseCBForest implements Database {
         }
     }
 
-
     // TODO: need??
     /**
      * CBLDatabase+LocalDocs.m
      * - (void) closeLocalDocsSoon
      */
     private void closeLocalDocsSoon(){
+        // TODO: need??
+    }
+
+    /**
+     * CBLDatabase+LocalDocs.m
+     * static NSDictionary* getDocProperties(const Document& doc)
+     */
+    public static Map<String, Object> getDocProperties(com.couchbase.lite.cbforest.Document doc){
+        if(doc == null)
+            return null;
+        if(doc.getBody().getBuf()==null)
+            return null;
+        Log.w(TAG, "doc.getBody() => " + doc.getBody());
+        Log.w(TAG, "doc.getBody().getBuf() => " + doc.getBody().getBuf());
+        String json = new String(doc.getBody().getBuf());
+        try {
+            return  Manager.getObjectMapper().readValue(json, Map.class);
+        } catch (Exception e) {
+            Log.w(Database.TAG, "Error parsing local doc JSON", e);
+            return null;
+        }
     }
 
     /**
@@ -1174,7 +1358,26 @@ public class DatabaseCBForest implements Database {
      */
     @InterfaceAudience.Private
     public RevisionInternal getLocalDocument(String docID, String revID) {
-        return null;
+        if(docID == null|| !docID.startsWith("_local/"))
+            return null;
+
+        com.couchbase.lite.cbforest.Document doc = getLocalDocs().get(new Slice(docID.getBytes()));
+        if(!doc.exists())
+            return null;
+
+        String gotRevID = new String(doc.getMeta().getBuf());
+        if(revID!=null && !revID.equals(gotRevID))
+            return null;
+
+        Map<String,Object> properties = getDocProperties(doc);
+        if(properties == null)
+            return null;
+        properties.put("_id", docID);
+        properties.put("_rev", gotRevID);
+        RevisionInternal result = new RevisionInternal(docID, gotRevID, false);
+        result.setProperties(properties);
+        return result;
+
     }
 
     /**
@@ -1183,10 +1386,49 @@ public class DatabaseCBForest implements Database {
      *                     prevRevisionID: (NSString*)prevRevID
      *                           obeyMVCC: (BOOL)obeyMVCC
      *                             status: (CBLStatus*)outStatus
+     *
+     *   Note: Not sure what obeyMVCC is. Not supported it yet.
      */
     @InterfaceAudience.Private
     public RevisionInternal putLocalRevision(RevisionInternal revision, String prevRevID) throws CouchbaseLiteException {
-        return null;
+        String docID = revision.getDocId();
+        if(!docID.startsWith("_local/")) {
+            throw new CouchbaseLiteException(Status.BAD_ID);
+        }
+
+        if(revision.isDeleted()) {
+            // DELETE:
+            deleteLocalDocument(docID, prevRevID);
+            return revision;
+        }
+        else{
+            // PUT:
+            byte[] json = encodeDocumentJSON(revision);
+            Log.w(TAG, "json => " + new String(json));
+            Transaction t = new Transaction(getLocalDocs());
+            try {
+                Slice key = new Slice(docID.getBytes());
+                com.couchbase.lite.cbforest.Document doc = getLocalDocs().get(key);
+                int generation = 0;
+                if (prevRevID != null) {
+                    generation = RevisionInternal.generationFromRevID(prevRevID);
+                    if (generation == 0) {
+                        throw new CouchbaseLiteException(Status.BAD_ID);
+                    }
+                    if (!prevRevID.equals(new String(doc.getMeta().getBuf())))
+                        throw new CouchbaseLiteException(Status.CONFLICT);
+                } else {
+                    if (doc.exists()) {
+                        throw new CouchbaseLiteException(Status.CONFLICT);
+                    }
+                }
+                String newRevID = Integer.toString(++generation) + "-local";
+                t.set(key, new Slice(newRevID.getBytes()), new Slice(json));
+                return revision.copyWithDocID(docID, newRevID);
+            }finally {
+                t.delete(); // without close transaction, causes deadlock....
+            }
+        }
     }
 
     /**
@@ -1194,12 +1436,35 @@ public class DatabaseCBForest implements Database {
      * - (CBLStatus) deleteLocalDocumentWithID: (NSString*)docID
      *                              revisionID: (NSString*)revID
      *                                obeyMVCC: (BOOL)obeyMVCC;
+     *
+     *  Note: Not sure what obeyMVCC is. Not supported it yet.
      */
     @InterfaceAudience.Private
     public void deleteLocalDocument(String docID, String revID) throws CouchbaseLiteException {
+        if(docID == null|| !docID.startsWith("_local/")) {
+            throw new CouchbaseLiteException(Status.BAD_ID);
+        }
+
+        if(revID == null) {
+            // Didn't specify a revision to delete: 404 or a 409, depending
+            if (getLocalDocument(docID, null) != null) {
+                throw new CouchbaseLiteException(Status.CONFLICT);
+            }
+            else {
+                throw new CouchbaseLiteException(Status.NOT_FOUND);
+            }
+        }
+
+        Transaction t = new Transaction(getLocalDocs());
+        com.couchbase.lite.cbforest.Document doc = getLocalDocs().get(new Slice(docID.getBytes()));
+        if(!doc.exists())
+            throw new CouchbaseLiteException(Status.NOT_FOUND);
+        else if(!revID.equals(new String(doc.getMeta().getBuf())))
+            throw new CouchbaseLiteException(Status.CONFLICT);
+        else
+            t.del(doc);
+        t.delete();
     }
-
-
 
     // pragma mark - INFO FOR KEY:
 
@@ -1226,13 +1491,6 @@ public class DatabaseCBForest implements Database {
         t.delete();
         return new Status(Status.OK);
     }
-
-
-
-
-
-
-
 
     // TODO: need??
     /**

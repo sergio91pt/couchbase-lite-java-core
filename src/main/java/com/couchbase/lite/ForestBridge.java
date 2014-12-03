@@ -1,15 +1,16 @@
 package com.couchbase.lite;
 
 
-import com.couchbase.lite.cbforest.RevIDBuffer;
-import com.couchbase.lite.cbforest.Slice;
-import com.couchbase.lite.cbforest.VersionedDocument;
+import com.couchbase.lite.cbforest.*;
+import com.couchbase.lite.cbforest.Revision;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.util.Log;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,6 +32,37 @@ public class ForestBridge {
     }
 
     /**
+     * in CBLForestBridge.m
+     * + (CBL_MutableRevision*) revisionObjectFromForestDoc: (VersionedDocument&)doc
+     *                                                revID: (NSString*)revID
+     *                                              options: (CBLContentOptions)options
+     */
+    public static RevisionInternal revisionObjectFromForestDoc(VersionedDocument doc, String revID, EnumSet<Database.TDContentOptions> options){
+        RevisionInternal rev = null;
+
+        String docID = new String(doc.getDocID().getBuf());
+        if(doc.revsAvailable()){
+            //com.couchbase.cbforest.Revision revNode = doc.get(new RevID(revID));
+            com.couchbase.lite.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(revID.getBytes())));
+            if(revNode == null) {
+                return null;
+            }
+            rev = new RevisionInternal(docID, revID, revNode.isDeleted());
+            rev.setSequence(revNode.getSequence().longValue());
+        }
+        else{
+            rev = new RevisionInternal(docID, new String(doc.getRevID().getBuf()), doc.isDeleted());
+            rev.setSequence(doc.getSequence().longValue());
+        }
+
+        if(!loadBodyOfRevisionObject(rev, options, doc))
+            return null;
+
+        return rev;
+    }
+
+    /**
+     * in CBLForestBridge.m
      * + (BOOL) loadBodyOfRevisionObject: (CBL_MutableRevision*)rev
      *                           options: (CBLContentOptions)options
      *                               doc: (VersionedDocument&)doc
@@ -61,33 +93,59 @@ public class ForestBridge {
     }
 
     /**
-     * + (CBL_MutableRevision*) revisionObjectFromForestDoc: (VersionedDocument&)doc
-     *                                                revID: (NSString*)revID
-     *                                              options: (CBLContentOptions)options
+     * in CBLForestBridge.m
+     * + (NSArray*) getCurrentRevisionIDs: (VersionedDocument&)doc
      */
-    public static RevisionInternal revisionObjectFromForestDoc(VersionedDocument doc, String revID, EnumSet<Database.TDContentOptions> options){
-        RevisionInternal rev = null;
-
-        String docID = new String(doc.getDocID().getBuf());
-        if(doc.revsAvailable()){
-            //com.couchbase.cbforest.Revision revNode = doc.get(new RevID(revID));
-            com.couchbase.lite.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(revID.getBytes())));
-            if(revNode == null) {
-                return null;
+    public static List<String> getCurrentRevisionIDs(VersionedDocument doc){
+        List<String> currentRevIDs = new ArrayList<String>();
+        VectorRevision revs = doc.currentRevisions();
+        for(int i = 0; i < revs.size(); i++) {
+            Revision rev = revs.get(i);
+            if(!rev.isDeleted()){
+                String revID = rev.getRevID().toString();
+                currentRevIDs.add(revID);
             }
-            rev = new RevisionInternal(docID, revID, revNode.isDeleted());
-            rev.setSequence(revNode.getSequence().longValue());
         }
-        else{
-            rev = new RevisionInternal(docID, new String(doc.getRevID().getBuf()), doc.isDeleted());
-            rev.setSequence(doc.getSequence().longValue());
-        }
-
-        if(!loadBodyOfRevisionObject(rev, options, doc))
-            return null;
-
-        return rev;
+        return currentRevIDs;
     }
+
+    /**
+     * in CBLForestBridge.m
+     * + (NSArray*) getRevisionHistory: (const Revision*)revNode
+     *
+     * Note: Unable to downcast from RevTree to VersionedDocument
+     *       Instead of downcast, add docID parameter
+     */
+    public static List<RevisionInternal> getRevisionHistory(String docID, Revision revNode){
+        List<RevisionInternal> history = new ArrayList<RevisionInternal>();
+        for(; revNode != null; revNode = revNode.getParent()){
+            RevisionInternal rev = new RevisionInternal(docID, revNode.getRevID().toString(), revNode.isDeleted());
+            rev.setMissing(!revNode.isBodyAvailable());
+            history.add(rev);
+        }
+        return history;
+    }
+
+    public static Map<String,Object> getRevisionHistoryDictStartingFromAnyAncestor(String docID, Revision revNode, List<String> ancestorRevIDs){
+        List<RevisionInternal> history = getRevisionHistory(docID, revNode);
+        if (ancestorRevIDs != null && ancestorRevIDs.size() > 0) {
+            int n = history.size();
+            for (int i = 0; i < n; ++i) {
+                if (ancestorRevIDs.contains(history.get(i).getRevId())) {
+                    history = history.subList(0, i+1);
+                    break;
+                }
+            }
+        }
+        return DatabaseUtil.makeRevisionHistoryDict(history);
+    }
+    /**
+     * in CBForestBridge.m
+     * static NSDictionary* makeRevisionHistoryDict(NSArray* history)
+     * moved to DatabaseUtil.java
+     */
+    //public static Map<String,Object> DatabaseUtil.makeRevisionHistoryDict(List<RevisionInternal> history);
+
 
     /**
      * + (void) addContentProperties: (CBLContentOptions)options

@@ -16,7 +16,6 @@ import java.util.Map;
 public class DatabaseUtil {
     /**
      * Parses the _revisions dict from a document into an array of revision ID strings
-     * @exclude
      */
     @InterfaceAudience.Private
     public static List<String> parseCouchDBRevisionHistory(Map<String,Object> docProperties) {
@@ -38,9 +37,6 @@ public class DatabaseUtil {
         return revIDs;
     }
 
-    /**
-     * @exclude
-     */
     @InterfaceAudience.Private
     public static boolean isValidDocumentId(String id) {
         // http://wiki.apache.org/couchdb/HTTP_Document_API#Documents
@@ -56,6 +52,7 @@ public class DatabaseUtil {
 
     // Replaces attachment data whose revpos is < minRevPos with stubs.
     // If attachmentsFollow==YES, replaces data with "follows" key.
+    @InterfaceAudience.Private
     public static void stubOutAttachmentsInRevBeforeRevPos(final RevisionInternal rev, final int minRevPos, final boolean attachmentsFollow) {
         if (minRevPos <= 1 && !attachmentsFollow) {
             return;
@@ -93,8 +90,10 @@ public class DatabaseUtil {
             }
         });
     }
+
     /**
-     * @exclude
+     * in CBLForestBridge.mm
+     * static NSDictionary* makeRevisionHistoryDict(NSArray* history)
      */
     @InterfaceAudience.Private
     public static Map<String,Object> makeRevisionHistoryDict(List<RevisionInternal> history) {
@@ -143,7 +142,6 @@ public class DatabaseUtil {
     }
     /**
      * Splits a revision ID into its generation number and opaque suffix string
-     * @exclude
      */
     @InterfaceAudience.Private
     public static int parseRevIDNumber(String rev) {
@@ -161,7 +159,6 @@ public class DatabaseUtil {
 
     /**
      * Splits a revision ID into its generation number and opaque suffix string
-     * @exclude
      */
     @InterfaceAudience.Private
     public static String parseRevIDSuffix(String rev) {
@@ -173,9 +170,6 @@ public class DatabaseUtil {
         return result;
     }
 
-    /**
-     * @exclude
-     */
     @InterfaceAudience.Private
     public static String generateDocumentId() {
         return Misc.TDCreateUUID();
