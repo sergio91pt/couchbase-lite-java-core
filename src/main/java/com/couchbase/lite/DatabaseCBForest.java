@@ -1053,11 +1053,18 @@ public class DatabaseCBForest implements Database {
                         revNode,
                         allowConflict);
                 status = doc.getLatestHttpStatus();
+                resultStatus.setCode(status);
                 if(fdbRev!=null)
                     putRev.setSequence(fdbRev.getSequence().longValue());
-                // TODO - implement status check code
+                if(fdbRev == null && resultStatus.isError())
+                    throw new CouchbaseLiteException(resultStatus);
+
                 // TODO - is address compare good enough??
-                isWinner = fdbRev.isSameAddress(doc.currentRevision());
+                if(fdbRev != null)
+                    isWinner = fdbRev.isSameAddress(doc.currentRevision());
+                else
+                    // Revision already exists without error
+                    isWinner = false;
             }
 
             // prune call will invalidate fdbRev ptr, so let it go out of scope
