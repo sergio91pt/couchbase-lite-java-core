@@ -23,6 +23,8 @@ import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.Utils;
 
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.net.URL;
@@ -31,12 +33,14 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
@@ -63,10 +67,15 @@ public class DatabaseCBForest implements Database {
 
     private Map<String, Validator> validations = null;
     final private CopyOnWriteArrayList<ChangeListener> changeListeners;
-    private Cache<String, Document> docCache;
+
     private List<DocumentChange> changesToNotify;
     private boolean postingChangeNotifications = false;
 
+    /**
+     * Variables defined in CBLDatabase.h or .m
+     */
+    private Cache<String, Document> docCache;
+    private Set<Replication> allReplicators = null;
     private int maxRevTreeDepth = DEFAULT_MAX_REVS;
 
     /**
@@ -81,6 +90,8 @@ public class DatabaseCBForest implements Database {
     private boolean readOnly = false;
     private boolean isOpen = false;
     private int transactionLevel = 0;
+    private Map<String, View> views = null;
+    private Set<Replication> activeReplicators;
     private long startTime = 0;
 
 
@@ -121,8 +132,8 @@ public class DatabaseCBForest implements Database {
         this.docCache = new Cache<String, Document>();
         this.startTime = System.currentTimeMillis();
         this.changesToNotify = new ArrayList<DocumentChange>();
-        //this.activeReplicators =  Collections.newSetFromMap(new ConcurrentHashMap());
-        //this.allReplicators = Collections.newSetFromMap(new ConcurrentHashMap());
+        this.activeReplicators =  Collections.newSetFromMap(new ConcurrentHashMap());
+        this.allReplicators = Collections.newSetFromMap(new ConcurrentHashMap());
     }
 
     /**
@@ -184,30 +195,82 @@ public class DatabaseCBForest implements Database {
         return isOpen;
     }
 
-    public boolean close() {
+    /**
+     * CBLDatabase.m
+     * - (BOOL) close: (NSError**)outError
+     */
+    public boolean close(){
+        this._close();
+        return true;
+    }
+
+    /**
+     * CBLDatabase+Internal.m
+     * - (void) _close
+     */
+    public void _close() {
         if(!isOpen) {
-            return false;
+            return;
         }
 
         Log.w(TAG, "Closing <" + toString() + "> " + dir);
 
+        // TODO: send any notifications if necessary!
+
+        // notify view to close
+        if(views != null) {
+            for (View view : views.values()) {
+                view.databaseClosing();
+            }
+        }
+        views = null;
+
+        // close replicators
+        if(activeReplicators != null) {
+            for(Replication replicator : activeReplicators) {
+                replicator.databaseClosing();
+            }
+            activeReplicators = null;
+        }
+        allReplicators = null;
+
+        // close database
         if(forest != null) {
             forest.delete(); // <- release instance. not delete database
             forest = null;
         }
 
+        // close local docs
+        closeLocalDocs();
+
         isOpen = false;
         transactionLevel = 0;
 
-        return true;
+        // clear document cache
+        clearDocumentCache();
+
+        // remove this db from manager
+        manager.forgetDatabase(this);
     }
+
+    /**
+     * CBLDatabase.m
+     * synthesize name=_name
+     */
     public String getName() {
         return name;
     }
+    /**
+     * CBLDatabase.m
+     * synthesize dir=_dir,
+     */
     public String getPath() {
         return dir;
     }
-
+    /**
+     * CBLDatabase.m
+     * synthesize manager=_manager
+     */
     public Manager getManager() {
         return manager;
     }
@@ -239,18 +302,81 @@ public class DatabaseCBForest implements Database {
         return forest.getLastSequence().longValue();
     }
 
+    /**
+     * Get all the replicators associated with this database.
+     */
+    @InterfaceAudience.Public
     public List<Replication> getAllReplications() {
-        return null;
+        List<Replication> allReplicatorsList =  new ArrayList<Replication>();
+        if (allReplicators != null) {
+            allReplicatorsList.addAll(allReplicators);
+        }
+        return allReplicatorsList;
     }
-
+    /**
+     * Compacts the database file by purging non-current JSON bodies, pruning revisions older than
+     * the maxRevTreeDepth, deleting unused attachment files, and vacuuming the SQLite database.
+     */
+    @InterfaceAudience.Public
     public void compact() throws CouchbaseLiteException {
         forest.compact();
+
+        // TODO!!!!
     }
 
-    // NOTE: Same with SQLite?
+
+
+    /**
+     * in CBLDatabase.m
+     * - (BOOL) deleteDatabase: (NSError**)outError
+     * @throws CouchbaseLiteException
+     */
     public void delete() throws CouchbaseLiteException {
-        // delete db file and index
-        forest.deleteDatabase();
+        Log.w(TAG, "Deleting " + dir);
+
+        // TODO: notification if necessary
+
+        if(isOpen) {
+            if(!close()) {
+                throw new CouchbaseLiteException("The database was open, and could not be closed", Status.INTERNAL_SERVER_ERROR);
+            }
+        }
+
+        // Wait for all threads to close this database file:
+        manager.forgetDatabase(this);
+        if(!exists()) {
+            return;
+        }
+
+        if(!deleteDatabaseFilesAtPath(dir)){
+            throw new CouchbaseLiteException("Was not able to delete the database file", Status.INTERNAL_SERVER_ERROR);
+        }
+    }
+    /**
+     * in CBLDatabase+Internal.m
+     * + (BOOL) deleteDatabaseFilesAtPath: (NSString*)dbDir error: (NSError**)outError
+     */
+    public static boolean deleteDatabaseFilesAtPath(String dbDir){
+        File file = new File(dbDir);
+        if(file.exists()){
+            try {
+                deleteDirectory(file);
+            }catch(IOException e){
+                return false;
+            }
+        }
+        return true;
+    }
+    /**
+     * Delete directory recursively (Not: File.delete() throws exception if directory is not empty.)
+     */
+    public static void deleteDirectory(File f) throws IOException {
+        if (f.isDirectory()) {
+            for (File c : f.listFiles())
+                deleteDirectory(c);
+        }
+        if (!f.delete())
+            throw new FileNotFoundException("Failed to delete file: " + f);
     }
 
     // NOTE: Same with SQLite?
@@ -379,12 +505,24 @@ public class DatabaseCBForest implements Database {
         docCache.remove(document.getId());
     }
 
+    /**
+     * CBLDatabase+Internal.m
+     * - (BOOL) exists
+     */
+    @InterfaceAudience.Private
     public boolean exists() {
-        return false;
+        return new File(dir).exists();
     }
 
+    @InterfaceAudience.Private
     public String getAttachmentStorePath() {
-        return null;
+        String attachmentStorePath = dir;
+        int lastDotPosition = attachmentStorePath.lastIndexOf('.');
+        if( lastDotPosition > 0 ) {
+            attachmentStorePath = attachmentStorePath.substring(0, lastDotPosition);
+        }
+        attachmentStorePath = attachmentStorePath + File.separator + "attachments";
+        return attachmentStorePath;
     }
 
     public boolean initialize(String statements) {
