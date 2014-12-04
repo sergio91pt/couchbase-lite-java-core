@@ -8,6 +8,7 @@ import com.couchbase.lite.cbforest.OpenFlags;
 import com.couchbase.lite.cbforest.RevIDBuffer;
 import com.couchbase.lite.cbforest.Slice;
 import com.couchbase.lite.cbforest.Transaction;
+import com.couchbase.lite.cbforest.VectorRevID;
 import com.couchbase.lite.cbforest.VersionedDocument;
 import com.couchbase.lite.internal.AttachmentInternal;
 import com.couchbase.lite.internal.InterfaceAudience;
@@ -211,10 +212,29 @@ public class DatabaseCBForest implements Database {
         return manager;
     }
 
+    /**
+     * in CBLDatabase+Internal.m
+     * - (NSUInteger) _documentCount
+     */
     public int getDocumentCount() {
-        return 0;
+        DocEnumerator.Options ops = DocEnumerator.Options.getDef();
+        ops.setContentOption(ContentOptions.kMetaOnly);
+        int count = 0;
+        DocEnumerator itr = new DocEnumerator(forest, Slice.getNull(), Slice.getNull(), ops);
+        if(itr.doc() != null) {
+            do {
+                VersionedDocument vdoc = new VersionedDocument(forest, itr.doc());
+                if (!vdoc.isDeleted())
+                    count++;
+            } while (itr.next());
+        }
+        return count;
     }
 
+    /**
+     * in CBLDatabase+Internal.m
+     * - (SequenceNumber) _lastSequence
+     */
     public long getLastSequenceNumber() {
         return forest.getLastSequence().longValue();
     }
@@ -480,6 +500,7 @@ public class DatabaseCBForest implements Database {
             // TODO: revID is something wrong!!!!!
             //revID = rev.getRevID().getBuf();
             revID =  new String(rev.getRevID().expanded().getBuf());
+            Log.w(TAG, "[getDocumentWithIDAndRev()] revID => " + revID);
         }
 
         result = ForestBridge.revisionObjectFromForestDoc(doc, revID, options);
@@ -537,7 +558,7 @@ public class DatabaseCBForest implements Database {
 
         for(int i = 0; i < revNodes.size(); i++){
             com.couchbase.lite.cbforest.Revision revNode = revNodes.get(i);
-            RevisionInternal rev = new RevisionInternal(docId, revNode.getRevID().toString(), revNode.isDeleted());
+            RevisionInternal rev = new RevisionInternal(docId, new String(revNode.getRevID().getBuf()), revNode.isDeleted());
             // TODO: not sure if sequence is required?
             rev.setSequence(revNode.getSequence().longValue());
             revs.add(rev);
@@ -615,6 +636,9 @@ public class DatabaseCBForest implements Database {
      */
     @InterfaceAudience.Private
     public RevisionList changesSince(long lastSeq, ChangesOptions options, ReplicationFilter filter, Map<String, Object> filterParams) {
+
+        Log.w(TAG, "[changesSince]");
+
         // http://wiki.apache.org/couchdb/HTTP_database_API#Changes
         // Translate options to ForestDB:
         if(options == null) {
@@ -644,9 +668,11 @@ public class DatabaseCBForest implements Database {
             }
             else {
                 revIDs = new ArrayList<String>();
-                revIDs.add(doc.getRevID().toString());
+                revIDs.add(new String(doc.getRevID().getBuf()));
             }
+
             for(String revID : revIDs){
+                Log.w(TAG, "[changesSince()] revID => " + revID);
                 RevisionInternal rev = ForestBridge.revisionObjectFromForestDoc(doc, revID, contentOptions);
                 if (runFilter(filter, filterParams, rev)) {
                     changes.add(rev);
@@ -1072,7 +1098,7 @@ public class DatabaseCBForest implements Database {
             doc.prune(maxRevTreeDepth);
             doc.save(forestTransaction);
 
-            Log.w(TAG, "[putDoc()] doc.currentRevision.getRevID().toString() => " + doc.currentRevision().getRevID().toString());
+            Log.w(TAG, "[putDoc()] doc.currentRevision().getRevID().getBuf() => " + new String(doc.currentRevision().getRevID().getBuf()));
 
             // TODO - implement doc.dump()
 
@@ -1105,8 +1131,112 @@ public class DatabaseCBForest implements Database {
         return putRev;
     }
 
-    public void forceInsert(RevisionInternal rev, List<String> revHistory, URL source) throws CouchbaseLiteException {
+    /**
+     * Add an existing revision of a document (probably being pulled) plus its ancestors.
+     *
+     * in CBLDatabase+Insertion.m
+     * - (CBLStatus) forceInsert: (CBL_Revision*)inRev
+     *          revisionHistory: (NSArray*)history  // in *reverse* order, starting with rev's revID
+     *                  source: (NSURL*)source
+     */
+    public void forceInsert(RevisionInternal inRev, List<String> history, URL source) throws CouchbaseLiteException {
 
+
+        RevisionInternal rev = inRev.copyWithDocID(inRev.getDocId(), inRev.getRevId());
+        rev.setSequence(0);
+        String docID = rev.getDocId();
+        String revId = rev.getRevId();
+        if(!DatabaseUtil.isValidDocumentId(docID) || (revId == null)) {
+            throw new CouchbaseLiteException(Status.BAD_ID);
+        }
+
+        if(forest.isReadOnly())
+            throw new CouchbaseLiteException(Status.FORBIDDEN);
+
+        int historyCount = 0;
+        if (history != null) {
+            historyCount = history.size();
+        }
+        if(historyCount == 0) {
+            history = new ArrayList<String>();
+            history.add(revId);
+            historyCount = 1;
+        } else if(!history.get(0).equals(rev.getRevId())) {
+            throw new CouchbaseLiteException(Status.BAD_ID);
+        }
+
+        if(inRev.getAttachments()!=null){
+            // TODO - attachments!!!
+        }
+
+        byte[] json = encodeDocumentJSON(inRev);
+        if(json==null)
+            throw new CouchbaseLiteException(Status.BAD_JSON);
+
+        Log.w(TAG, "[forceInsert()] json => " + new String(json));
+
+
+        DocumentChange change = null;
+        Status resultStatus = new Status();
+
+        beginTransaction();
+        try {
+            // First get the CBForest doc:
+            VersionedDocument doc = new VersionedDocument(forest, new Slice(docID.getBytes()));
+
+            // Add the revision & ancestry to the doc:
+            VectorRevID historyVector = new VectorRevID();
+            convertRevIDs(history, historyVector);
+            int common = doc.insertHistory(historyVector, new Slice(json), inRev.isDeleted(), (inRev.getAttachments()!=null));
+            Log.w(TAG, "common => " + common);
+            if(common < 0) {
+                resultStatus.setCode(Status.BAD_REQUEST);
+                throw new CouchbaseLiteException(resultStatus); // generation numbers not in descending order
+            }
+            else if(common == 0) {
+                resultStatus.setCode(Status.OK);
+                return; // No-op: No new revisions were inserted.
+            }
+
+            // Validate against the common ancestor:
+            // TODO: NEED to implement validation
+
+            doc.prune(maxRevTreeDepth);
+            doc.save(forestTransaction);
+
+            change = changeWithNewRevision(inRev,
+                    false, // might be, but not known for sure
+                    doc,
+                    source);
+
+            // Success!
+            resultStatus.setCode(Status.CREATED);
+
+        }finally {
+            endTransaction(resultStatus.isSuccessful());
+        }
+
+        if(change != null)
+            notifyChange(change);
+
+        return;
+    }
+
+    /**
+     * CBLDatabase+Insertion.m
+     * static void convertRevIDs(NSArray* revIDs,
+     *                          std::vector<revidBuffer> &historyBuffers,
+     *                          std::vector<revid> &historyVector)
+     */
+    private static void convertRevIDs(List<String> history, VectorRevID historyVector){
+        for(String revID : history){
+            Log.w(TAG, "revID => " + revID);
+            //RevID revid = new RevID(revID.getBytes());
+            //historyVector.add(revid);
+            //TODO add RevIDBuffer(String or byte[])
+            RevIDBuffer revidbuffer = new RevIDBuffer(new Slice(revID.getBytes()));
+            historyVector.add(revidbuffer);
+        }
     }
 
     public void validateRevision(RevisionInternal newRev, RevisionInternal oldRev, String parentRevID) throws CouchbaseLiteException {
@@ -1265,7 +1395,7 @@ public class DatabaseCBForest implements Database {
         RevisionInternal winningRev = inRev;
         if(isWinningRev == false){
             com.couchbase.lite.cbforest.Revision winningRevision = doc.currentRevision();
-            String winningRevID = winningRevision.getRevID().toString();
+            String winningRevID = new String(winningRevision.getRevID().getBuf());
             if(!winningRevID.equals(inRev.getRevId().toString())){
                 winningRev = new RevisionInternal(inRev.getDocId(), winningRevID, winningRevision.isDeleted());
             }

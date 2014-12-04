@@ -22,13 +22,28 @@ public class ForestBridge {
     public final static String TAG ="ForestBridge";
 
     /**
+     * in CBLForestBridge.mm
      * static NSData* dataOfNode(const Revision* rev)
      */
     public static byte[] dataOfNode(com.couchbase.lite.cbforest.Revision rev){
+        /*
         byte[] body = rev.getBody().getBuf();
         if(body!=null)
             return body;
         return rev.readBody().getBuf();
+        */
+        byte[] body = rev.getBody().getBuf();
+        if(body != null){
+            return body;
+        }
+        else{
+            body = rev.readBody().getBuf();
+            if(body != null){
+                return body;
+            }else{
+                return "".getBytes();
+            }
+        }
     }
 
     /**
@@ -75,16 +90,17 @@ public class ForestBridge {
         com.couchbase.lite.cbforest.Revision revNode = doc.get(new RevIDBuffer(new Slice(rev.getRevId().getBytes())));
         if(revNode == null)
             return false;
-
         byte[] json = dataOfNode(revNode);
-        if(json==null)
+        if (json == null)
             return false;
+        Log.w(TAG, "json => "+new String(json));
         rev.setSequence(revNode.getSequence().longValue());
+
 
 
         Map<String,Object> extra = new HashMap<String,Object>();
         addContentProperties(options, extra, revNode, doc);
-        if(json.length > 0)
+        if(json!=null&&json.length > 0)
            rev.setJson(appendDictToJSON(extra, json));
         else
             rev.setProperties(extra);
@@ -102,7 +118,8 @@ public class ForestBridge {
         for(int i = 0; i < revs.size(); i++) {
             Revision rev = revs.get(i);
             if(!rev.isDeleted()){
-                String revID = rev.getRevID().toString();
+                String revID = new String(rev.getRevID().getBuf());
+                Log.w(TAG, "[getCurrentRevisionIDs()] revID =>" + revID);
                 currentRevIDs.add(revID);
             }
         }
@@ -119,7 +136,8 @@ public class ForestBridge {
     public static List<RevisionInternal> getRevisionHistory(String docID, Revision revNode){
         List<RevisionInternal> history = new ArrayList<RevisionInternal>();
         for(; revNode != null; revNode = revNode.getParent()){
-            RevisionInternal rev = new RevisionInternal(docID, revNode.getRevID().toString(), revNode.isDeleted());
+            Log.w(TAG, "[getRevisionHistory()] new String(revNode.getRevID().getBuf()) => " + new String(revNode.getRevID().getBuf()) + " len => " + revNode.getRevID().getBuf().length);
+            RevisionInternal rev = new RevisionInternal(docID, new String(revNode.getRevID().getBuf()), revNode.isDeleted());
             rev.setMissing(!revNode.isBodyAvailable());
             history.add(rev);
         }
