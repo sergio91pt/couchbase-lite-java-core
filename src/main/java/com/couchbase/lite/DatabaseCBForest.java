@@ -250,9 +250,7 @@ public class DatabaseCBForest implements Database {
 
     }
 
-    public boolean runInTransaction(TransactionalTask transactionalTask) {
-        return false;
-    }
+
 
     public Future runAsync(AsyncTask asyncTask) {
         return null;
@@ -312,34 +310,7 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public boolean beginTransaction() {
-        // Transaction() -> db.beginTransaction()
-        forestTransaction = new Transaction(forest);
-        transactionLevel++;
-        Log.w(TAG, "%s Begin transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
-        return true;
-    }
 
-    public boolean endTransaction(boolean commit) {
-
-        assert(transactionLevel > 0);
-        if(commit) {
-            Log.i(TAG, "%s Committing transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
-            // ~Transaction() -> db.endTransaction() -> fdb_end_transaction
-        }
-        else {
-            Log.i(TAG, "%s CANCEL transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
-            // set state -> abort
-            forestTransaction.abort();
-            // ~Transaction() -> db.endTransaction() -> fdb_abort_transaction
-        }
-        forestTransaction.delete();
-        forestTransaction = null;
-
-        transactionLevel--;
-
-        return true;
-    }
 
     public byte[] appendDictToJSON(byte[] json, Map<String, Object> dict) {
         return new byte[0];
@@ -900,6 +871,21 @@ public class DatabaseCBForest implements Database {
     }
 
     /**
+     * Runs the block within a transaction. If the block returns NO, the transaction is rolled back.
+     * Use this when performing bulk write operations like multiple inserts/updates;
+     * it saves the overhead of multiple SQLite commits, greatly improving performance.
+     *
+     * Does not commit the transaction if the code throws an Exception.
+     *
+     * in CBLDatabase.m
+     * - (BOOL) inTransaction: (BOOL(^)(void))block
+     */
+    @InterfaceAudience.Public
+    public boolean runInTransaction(TransactionalTask transactionalTask) {
+        return _runInTransaction(transactionalTask);
+    }
+
+    /**
      * static NSString* makeLocalDocID(NSString* docID)
      */
     @InterfaceAudience.Public
@@ -1039,6 +1025,66 @@ public class DatabaseCBForest implements Database {
     public String publicUUID() {
         return getInfo("publicUUID");
     }
+
+
+    //pragma mark - TRANSACTIONS & NOTIFICATIONS:
+
+    /**
+     * Runs the block within a transaction. If the block returns NO, the transaction is rolled back.
+     * Use this when performing bulk write operations like multiple inserts/updates;
+     * it saves the overhead of multiple SQLite commits, greatly improving performance.
+     *
+     * Does not commit the transaction if the code throws an Exception.
+     *
+     * in CBLDatabase+Internal.m
+     * - (CBLStatus) _inTransaction: (CBLStatus(^)())block
+     */
+    @InterfaceAudience.Private
+    public boolean _runInTransaction(TransactionalTask transactionalTask) {
+        beginTransaction();
+        boolean shouldCommit = true;
+        try {
+            shouldCommit = transactionalTask.run();
+        } catch (Exception e) {
+            shouldCommit = false;
+            Log.e(Database.TAG, e.toString(), e);
+            throw new RuntimeException(e);
+        } finally {
+            endTransaction(shouldCommit);
+        }
+        return shouldCommit;
+    }
+
+    @InterfaceAudience.Private
+    public boolean beginTransaction() {
+        if(++transactionLevel == 1)
+            forestTransaction = new Transaction(forest);
+        Log.w(TAG, "%s Begin transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
+        return true;
+    }
+
+    @InterfaceAudience.Private
+    public boolean endTransaction(boolean commit) {
+
+        assert(transactionLevel > 0);
+        if(commit) {
+            Log.i(TAG, "%s Committing transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
+            // ~Transaction() -> db.endTransaction() -> fdb_end_transaction
+        }
+        else {
+            Log.i(TAG, "%s CANCEL transaction (level %d)", Thread.currentThread().getName(), transactionLevel);
+            // set state -> abort
+            forestTransaction.abort();
+            // ~Transaction() -> db.endTransaction() -> fdb_abort_transaction
+        }
+        if(--transactionLevel == 0){
+            forestTransaction.delete();
+            forestTransaction = null;
+            this.postChangeNotifications();
+        }
+        return true;
+    }
+
 
     /**
      * in CBLDatabase+Internal.m
