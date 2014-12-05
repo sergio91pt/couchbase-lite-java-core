@@ -1472,7 +1472,13 @@ public class DatabaseCBForest implements Database {
 
             // Run any validation blocks:
             if(hasValidations){
-                // TODO - implement!!!
+                // Fetch the previous revision and validate the new one against it:
+                RevisionInternal fakeNewRev = putRev.copyWithDocID(putRev.getDocId(), null);
+                RevisionInternal prevRev = null;
+                if(prevRevID != null){
+                    prevRev = new RevisionInternal(docID, prevRevID, revNode.isDeleted());
+                }
+                validateRevision(fakeNewRev, prevRev, prevRevID);
             }
 
             // Add the revision to the database:
@@ -1664,6 +1670,22 @@ public class DatabaseCBForest implements Database {
                                  String parentRevID)
             throws CouchbaseLiteException {
 
+        if(validations == null || validations.size() == 0) {
+            return;
+        }
+
+        SavedRevision publicRev = new SavedRevision(this, newRev);
+        publicRev.setParentRevisionID(parentRevID);
+
+        ValidationContextImpl context = new ValidationContextImpl(this, oldRev, newRev);
+
+        for (String validationName : validations.keySet()) {
+            Validator validation = getValidation(validationName);
+            validation.validate(publicRev, context);
+            if(context.getRejectMessage() != null) {
+                throw new CouchbaseLiteException(context.getRejectMessage(), Status.FORBIDDEN);
+            }
+        }
     }
 
 
