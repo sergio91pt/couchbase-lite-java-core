@@ -23,8 +23,6 @@ import com.couchbase.lite.util.Log;
 import com.couchbase.lite.util.Utils;
 
 import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.net.URL;
@@ -91,6 +89,7 @@ public class DatabaseCBForest implements Database {
     private boolean isOpen = false;
     private int transactionLevel = 0;
     private Map<String, View> views = null;
+    private BlobStore attachments = null;
     private Set<Replication> activeReplicators;
     private long startTime = 0;
 
@@ -184,7 +183,13 @@ public class DatabaseCBForest implements Database {
         }
 
         // Open attachment store:
-        // TODO - attachment store
+        try {
+            attachments = new BlobStore(getAttachmentStorePath());
+        } catch (IllegalArgumentException e) {
+            Log.e(Database.TAG, "Could not initialize attachment store", e);
+            forest.delete();
+            return false;
+        }
 
         isOpen = true;
 
@@ -200,6 +205,7 @@ public class DatabaseCBForest implements Database {
      * - (BOOL) close: (NSError**)outError
      */
     public boolean close(){
+        // NOTE: replications are closed in _close()
         this._close();
         return true;
     }
@@ -351,6 +357,20 @@ public class DatabaseCBForest implements Database {
         if(!deleteDatabaseFilesAtPath(dir)){
             throw new CouchbaseLiteException("Was not able to delete the database file", Status.INTERNAL_SERVER_ERROR);
         }
+
+        // TODO: in deleteDatabase for iOS does not delete Attachment. deleting attachment should be different method??
+        File attachmentsFile = new File(getAttachmentStorePath());
+        //recursively delete attachments path
+        boolean deleteAttachmentStatus = FileDirUtils.deleteRecursive(attachmentsFile);
+        //recursively delete path where attachments stored( see getAttachmentStorePath())
+        int lastDotPosition = dir.lastIndexOf('.');
+        if( lastDotPosition > 0 ) {
+            File attachmentsFileUpFolder = new File(dir.substring(0, lastDotPosition));
+            FileDirUtils.deleteRecursive(attachmentsFileUpFolder);
+        }
+        if (!deleteAttachmentStatus) {
+            throw new CouchbaseLiteException("Was not able to delete the attachments files", Status.INTERNAL_SERVER_ERROR);
+        }
     }
     /**
      * in CBLDatabase+Internal.m
@@ -359,25 +379,11 @@ public class DatabaseCBForest implements Database {
     public static boolean deleteDatabaseFilesAtPath(String dbDir){
         File file = new File(dbDir);
         if(file.exists()){
-            try {
-                deleteDirectory(file);
-            }catch(IOException e){
-                return false;
-            }
+            FileDirUtils.deleteRecursive(file);
         }
         return true;
     }
-    /**
-     * Delete directory recursively (Not: File.delete() throws exception if directory is not empty.)
-     */
-    public static void deleteDirectory(File f) throws IOException {
-        if (f.isDirectory()) {
-            for (File c : f.listFiles())
-                deleteDirectory(c);
-        }
-        if (!f.delete())
-            throw new FileNotFoundException("Failed to delete file: " + f);
-    }
+
 
     // NOTE: Same with SQLite?
     public Document getDocument(String documentId) {
@@ -514,16 +520,7 @@ public class DatabaseCBForest implements Database {
         return new File(dir).exists();
     }
 
-    @InterfaceAudience.Private
-    public String getAttachmentStorePath() {
-        String attachmentStorePath = dir;
-        int lastDotPosition = attachmentStorePath.lastIndexOf('.');
-        if( lastDotPosition > 0 ) {
-            attachmentStorePath = attachmentStorePath.substring(0, lastDotPosition);
-        }
-        attachmentStorePath = attachmentStorePath + File.separator + "attachments";
-        return attachmentStorePath;
-    }
+
 
     public boolean initialize(String statements) {
         return false;
@@ -535,16 +532,24 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
+    /**
+     * CBLDatabase+Internal.m
+     * - (CBL_BlobStore*) attachmentStore
+     */
+    @InterfaceAudience.Private
     public BlobStore getAttachments() {
-        return null;
+        return attachments;
     }
 
-    public BlobStoreWriter getAttachmentWriter() {
-        return null;
-    }
-
+    /**
+     * CBLDatabase+Internal.m
+     * - (UInt64) totalDataSize
+     */
+    @InterfaceAudience.Private
     public long totalDataSize() {
-        return 0;
+        File f = new File(dir);
+        long size = f.length() + attachments.totalDataSize();
+        return size;
     }
 
     public boolean beginTransaction() {
@@ -1564,7 +1569,7 @@ public class DatabaseCBForest implements Database {
     }
 
     //================================================================================
-    // CBLDatabase+LocalDocs (Database/CBLDAtabase+LocalDocs.m)
+    // CBLDatabase+LocalDocs (Database/CBLDatabase+LocalDocs.m)
     //================================================================================
 
     /**
@@ -1789,4 +1794,36 @@ public class DatabaseCBForest implements Database {
     public boolean putLocalDocument(String id, Map<String, Object> properties) throws CouchbaseLiteException {
         return false;
     }
+
+
+    //================================================================================
+    // CBLDatabase+Attachments (Database/CBLDatabase+Attachments.m)
+    //================================================================================
+
+    /**
+     * in CBLDatabase+Attachments.m
+     *  (NSString*) attachmentStorePath
+     */
+    @InterfaceAudience.Private
+    public String getAttachmentStorePath() {
+        String attachmentStorePath = dir;
+        int lastDotPosition = attachmentStorePath.lastIndexOf('.');
+        if( lastDotPosition > 0 ) {
+            attachmentStorePath = attachmentStorePath.substring(0, lastDotPosition);
+        }
+        attachmentStorePath = attachmentStorePath + File.separator + "attachments";
+        return attachmentStorePath;
+    }
+
+    // pragma mark - ATTACHMENT WRITERS:
+
+    /**
+     * CBLDatabase+Attachments.m
+     * - (CBL_BlobStoreWriter*) attachmentWriter
+     */
+    @InterfaceAudience.Private
+    public BlobStoreWriter getAttachmentWriter() {
+        return new BlobStoreWriter(getAttachments());
+    }
 }
+
