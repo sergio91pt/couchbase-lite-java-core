@@ -56,7 +56,8 @@ public class AttachmentInternal {
         // digest
         if (attachInfo.containsKey("digest")) {
             this.digest = (String) attachInfo.get("digest");
-            this.blobKey = new BlobKey(this.digest);
+            if(this.digest!= null)
+                this.blobKey = digestToBlobKey(this.digest);
         }
         // encoding
         if (attachInfo.containsKey("encoding")) {
@@ -108,6 +109,16 @@ public class AttachmentInternal {
         return key.base64Digest();
     }
 
+
+    /**
+     * in CBL_Attachment.m
+     * static bool digestToBlobKey(NSString* digest, CBLBlobKey* key)
+     */
+    static private BlobKey digestToBlobKey(String digest){
+        if(!digest.startsWith("sha1-"))
+            return null;
+        return new BlobKey(digest);
+    }
     /**
      * in CBL_Attachment.m
      * - (NSDictionary*) asStubDictionary
