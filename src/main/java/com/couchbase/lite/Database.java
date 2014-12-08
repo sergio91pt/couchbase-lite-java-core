@@ -64,7 +64,8 @@ public interface Database {
         TDIncludeLocalSeq,
         TDNoBody,
         TDBigAttachmentsFollow,
-        TDNoAttachments
+        TDNoAttachments,
+        TDLeaveAttachmentsEncoded
     }
 
     /**

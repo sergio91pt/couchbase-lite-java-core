@@ -30,12 +30,12 @@ import java.util.StringTokenizer;
  */
 public class RevisionInternal {
 
-    private String docId;
-    private String revId;
+    private String docId = null;
+    private String revId = null;
     private boolean deleted;
     private boolean missing;
-    private Body body;
-    private long sequence;
+    private Body body = null;
+    private long sequence = 0;
 
     public RevisionInternal(String docId, String revId, boolean deleted) {
         this.docId = docId;
@@ -193,6 +193,7 @@ public class RevisionInternal {
 
     public static int generationFromRevID(String revID) {
         int generation = 0;
+        if(revID == null||revID.length()==0) return generation;
         int dashPos = revID.indexOf("-");
         if (dashPos > 0) {
             generation = Integer.parseInt(revID.substring(0, dashPos));

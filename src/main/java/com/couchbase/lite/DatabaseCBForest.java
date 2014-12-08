@@ -11,20 +11,27 @@ import com.couchbase.lite.cbforest.Transaction;
 import com.couchbase.lite.cbforest.VectorRevID;
 import com.couchbase.lite.cbforest.VersionedDocument;
 import com.couchbase.lite.internal.AttachmentInternal;
+import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.replicator.Replication;
 import com.couchbase.lite.storage.SQLException;
 import com.couchbase.lite.storage.SQLiteStorageEngine;
+import com.couchbase.lite.support.Base64;
 import com.couchbase.lite.support.FileDirUtils;
 import com.couchbase.lite.support.HttpClientFactory;
 import com.couchbase.lite.support.PersistentCookieStore;
+import com.couchbase.lite.util.CollectionUtils;
 import com.couchbase.lite.util.Log;
+import com.couchbase.lite.util.StreamUtils;
 import com.couchbase.lite.util.Utils;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.security.MessageDigest;
@@ -90,11 +97,16 @@ public class DatabaseCBForest implements Database {
     private int transactionLevel = 0;
     private Map<String, View> views = null;
     private BlobStore attachments = null;
+    private Map<String, BlobStoreWriter> pendingAttachmentsByDigest = null;
     private Set<Replication> activeReplicators;
     private long startTime = 0;
 
-    private static final Set<String> KNOWN_SPECIAL_KEYS;
 
+
+
+
+
+    private static final Set<String> KNOWN_SPECIAL_KEYS;
     static {
         KNOWN_SPECIAL_KEYS = new HashSet<String>();
         KNOWN_SPECIAL_KEYS.add("_id");
@@ -328,13 +340,9 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public boolean existsDocumentWithIDAndRev(String docId, String revId) {
-        return false;
-    }
 
-    public RevisionInternal loadRevisionBody(RevisionInternal rev, EnumSet<TDContentOptions> contentOptions) throws CouchbaseLiteException {
-        return null;
-    }
+
+
 
     public long getDocNumericID(String docId) {
         return 0;
@@ -420,17 +428,7 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public void insertAttachmentForSequenceWithNameAndType(InputStream contentStream, long sequence, String name, String contentType, int revpos) throws CouchbaseLiteException {
 
-    }
-
-    public void insertAttachmentForSequenceWithNameAndType(long sequence, String name, String contentType, int revpos, BlobKey key) throws CouchbaseLiteException {
-
-    }
-
-    public void installAttachment(AttachmentInternal attachment, Map<String, Object> attachInfo) throws CouchbaseLiteException {
-
-    }
 
     public void copyAttachmentNamedFromSequenceToSequence(String name, long fromSeq, long toSeq) throws CouchbaseLiteException {
 
@@ -448,9 +446,6 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public URL fileForAttachmentDict(Map<String, Object> attachmentDict) {
-        return null;
-    }
 
     public void stubOutAttachmentsIn(RevisionInternal rev, int minRevPos) {
 
@@ -460,21 +455,11 @@ public class DatabaseCBForest implements Database {
         return false;
     }
 
-    public void processAttachmentsForRevision(Map<String, AttachmentInternal> attachments, RevisionInternal rev, long parentSequence) throws CouchbaseLiteException {
 
-    }
 
-    public RevisionInternal updateAttachment(String filename, BlobStoreWriter body, String contentType, AttachmentInternal.AttachmentEncoding encoding, String docID, String oldRevID) throws CouchbaseLiteException {
-        return null;
-    }
 
-    public void rememberAttachmentWritersForDigests(Map<String, BlobStoreWriter> blobsByDigest) {
 
-    }
 
-    public void rememberAttachmentWriter(BlobStoreWriter writer) {
-
-    }
 
     public Status garbageCollectAttachments() {
         return null;
@@ -602,23 +587,7 @@ public class DatabaseCBForest implements Database {
         return 0;
     }
 
-    // NOTE: Same with SQLite?
-    // Backward compatibility
-    public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, Status resultStatus) throws CouchbaseLiteException {
-        return putRevision(rev, prevRevId, false, resultStatus);
-    }
 
-    // NOTE: Same with SQLite?
-    // Backward compatibility
-    public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, boolean allowConflict) throws CouchbaseLiteException {
-        Status ignoredStatus = new Status();
-        return putRevision(rev, prevRevId, allowConflict, ignoredStatus);
-    }
-
-    // Backward compatibility
-    public RevisionInternal putRevision(RevisionInternal putRev, String inPrevRevID, boolean allowConflict, Status outStatus) throws CouchbaseLiteException{
-        return putDoc(putRev.getDocId(), putRev.getProperties(), inPrevRevID, allowConflict, outStatus);
-    }
 
     public Replication getActiveReplicator(URL remote, boolean push) {
         return null;
@@ -1311,9 +1280,55 @@ public class DatabaseCBForest implements Database {
         return changes;
     }
 
+
+    /**
+     * in CBLDatabase+Internal.m
+     * - (BOOL) existsDocumentWithID: (NSString*)docID revisionID: (NSString*)revID
+     */
+    public boolean existsDocumentWithIDAndRev(String docId, String revId) {
+        return getDocumentWithIDAndRev(docId, revId, EnumSet.of(TDContentOptions.TDNoBody)) != null;
+    }
+
+    /**
+     * in CBLDatabase+Internal.m
+     * - (CBLStatus) loadRevisionBody: (CBL_MutableRevision*)rev
+     *                        options: (CBLContentOptions)options
+     */
+    @InterfaceAudience.Private
+    public RevisionInternal loadRevisionBody(RevisionInternal rev,
+                                             EnumSet<TDContentOptions> options)
+            throws CouchbaseLiteException {
+
+        // First check for no-op -- if we just need the default properties and already have them:
+        if(rev.getBody() != null && options == EnumSet.noneOf(Database.TDContentOptions.class) && rev.getSequence() != 0) {
+            return rev;
+        }
+
+        if((rev.getDocId() == null) || (rev.getRevId() == null)) {
+            Log.e(Database.TAG, "Error loading revision body");
+            throw new CouchbaseLiteException(Status.PRECONDITION_FAILED);
+        }
+
+        VersionedDocument doc = new VersionedDocument(forest, new Slice(rev.getDocId().getBytes()));
+        if(doc == null||!doc.exists())
+            throw new CouchbaseLiteException(Status.NOT_FOUND);
+        if (!ForestBridge.loadBodyOfRevisionObject(rev, options, doc)) {
+            throw new CouchbaseLiteException(Status.NOT_FOUND);
+        }
+        if(options.contains(TDContentOptions.TDIncludeAttachments)){
+            expandAttachmentsIn(rev, options);
+        }
+
+        return rev;
+    }
+
+    // pragma mark - HISTORY:
+
     //================================================================================
     // CBLDatabase+Attachments (Database/CBLDatabase+Attachments.m)
     //================================================================================
+
+
 
     /**
      * in CBLDatabase+Attachments.m
@@ -1341,9 +1356,422 @@ public class DatabaseCBForest implements Database {
         return new BlobStoreWriter(getAttachments());
     }
 
+    /**
+     * lazy loading
+     */
+    @InterfaceAudience.Private
+    private Map<String, BlobStoreWriter> getPendingAttachmentsByDigest() {
+        if (pendingAttachmentsByDigest == null) {
+            pendingAttachmentsByDigest = new HashMap<String, BlobStoreWriter>();
+        }
+        return pendingAttachmentsByDigest;
+    }
+
+    /**
+     * CBLDatabase+Attachments.m
+     * - (void) rememberAttachmentWriter: (CBL_BlobStoreWriter*)writer
+     */
+    @InterfaceAudience.Private
+    public void rememberAttachmentWriter(BlobStoreWriter writer) {
+        getPendingAttachmentsByDigest().put(writer.mD5DigestString(), writer);
+    }
+
+    /**
+     * CBLDatabase+Attachments.m
+     * - (void) rememberAttachmentWritersForDigests: (NSDictionary*)blobsByDigests
+     */
+    @InterfaceAudience.Private
+    public void rememberAttachmentWritersForDigests(Map<String, BlobStoreWriter> blobsByDigest) {
+        getPendingAttachmentsByDigest().putAll(blobsByDigest);
+    }
+
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    void insertAttachmentForSequence(AttachmentInternal attachment, long sequence) throws CouchbaseLiteException {
+        throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
+    }
+
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    public void insertAttachmentForSequenceWithNameAndType(InputStream contentStream, long sequence, String name, String contentType, int revpos) throws CouchbaseLiteException {
+        throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
+    }
+
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    public void insertAttachmentForSequenceWithNameAndType(long sequence, String name, String contentType, int revpos, BlobKey key) throws CouchbaseLiteException {
+        throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
+    }
+
+    /**
+     * Given a decoded attachment with a "follows" property, find the associated CBL_BlobStoreWriter
+     * and install it into the blob-store.
+     *
+     * in CBLDatabase+Attachments.m
+     * - (CBLStatus) installAttachment: (CBL_Attachment*)attachment
+     */
+    @InterfaceAudience.Private
+    public void installAttachment(AttachmentInternal attachment, Map<String, Object> attachInfo) throws CouchbaseLiteException {
+        String digest = (String) attachInfo.get("digest");
+        if (digest == null) {
+            throw new CouchbaseLiteException(Status.BAD_ATTACHMENT);
+        }
+        if (pendingAttachmentsByDigest != null && pendingAttachmentsByDigest.containsKey(digest)) {
+            BlobStoreWriter writer = pendingAttachmentsByDigest.get(digest);
+            try {
+                writer.install();
+                attachment.setBlobKey(writer.getBlobKey());
+                attachment.setLength(writer.getLength());
+            } catch (Exception e) {
+                throw new CouchbaseLiteException(e, Status.STATUS_ATTACHMENT_ERROR);
+            }
+        }
+    }
+
+
+    // pragma mark - LOOKING UP ATTACHMENTS:
+
+    /**
+     * * in CBLDatabase+Attachments.m
+     * - (NSDictionary*) attachmentsForDocID: (NSString*)docID
+     *                                 revID: (NSString*)revID
+     *                                status: (CBLStatus*)outStatus
+     */
+    private Map getAttachments(String docID, String revID){
+        RevisionInternal mrev = new RevisionInternal(docID, revID, false);
+        try {
+            mrev = loadRevisionBody(mrev, EnumSet.noneOf(TDContentOptions.class));
+        } catch (CouchbaseLiteException e) {
+            //Log.w(TAG, e.getMessage());
+            return null;
+        }
+        return mrev.getAttachments();
+    }
+
+    // pragma mark - UPDATING _attachments DICTS:
+
+    /**
+     * in CBLDatabase+Attachments.m
+     * - (void) expandAttachmentsIn: (CBL_MutableRevision*)rev options: (CBLContentOptions)options
+     */
+    private void expandAttachmentsIn(final RevisionInternal rev, EnumSet<TDContentOptions> options){
+        final boolean decodeAttachments = !options.contains(TDContentOptions.TDLeaveAttachmentsEncoded);
+        rev.mutateAttachments(new CollectionUtils.Functor<Map<String,Object>,Map<String,Object>>() {
+            public Map<String, Object> invoke(Map<String, Object> attachment) {
+                String encoding = (String)attachment.get("encoding");
+                boolean decodeIt = decodeAttachments && (encoding != null);
+                if(decodeIt || attachment.get("stub") != null || attachment.get("follows") != null){
+                    Map<String, Object> expanded = new HashMap<String, Object>(attachment);
+                    expanded.remove("stub");
+                    expanded.remove("follows");
+
+                    String base64Data = (String)attachment.get("data");
+                    if(base64Data == null || decodeIt){
+                        byte[] data = null;
+                        if(base64Data!=null)
+                            try {
+                                data = Base64.decode(base64Data);
+                            } catch (IOException e) {
+                                Log.w(TAG, "Unable to decode");
+                                data = null;
+                            }
+                        else
+                            data = dataForAttachmentDict(attachment);
+                        if(data == null) {
+                            Log.w(TAG, "Can't get binary data of attachment '" + name + "' of " + rev);
+                            return attachment;
+                        }
+                        if(decodeIt){
+                            // TODO: revisit later!!!!
+                            try {
+                                data = Manager.getObjectMapper().readValue(data, byte[].class);
+                            } catch (IOException e) {
+                                Log.w(TAG, "parse error");
+                                data = null;
+                            }
+                            if(data == null){
+                                Log.w(TAG, "Can't unzip attachment '" + name + "' of " + rev);
+                                return attachment;
+                            }
+                            expanded.remove("encoding");
+                            expanded.remove("encoded_length");
+                        }
+                        expanded.put("data", Base64.encodeBytes(data));
+                    }
+                    attachment = expanded;
+                }
+                return attachment;
+            }
+        });
+    }
+
+    /**
+     * in CBLDatabase+Attachments.m
+     * - (NSData*) dataForAttachmentDict: (NSDictionary*)attachmentDict
+     */
+    private byte[] dataForAttachmentDict(Map<String,Object> attachmentDict){
+        URL fileURL = fileForAttachmentDict(attachmentDict);
+        if(fileURL == null)
+            return null;
+
+        byte[] fileData = null;
+        try {
+            InputStream is = fileURL.openStream();
+            ByteArrayOutputStream os = new ByteArrayOutputStream();
+            StreamUtils.copyStream(is, os);
+            fileData = os.toByteArray();
+        } catch (IOException e) {
+            Log.e(Log.TAG_SYNC,"could not retrieve attachment data: %S",e);
+            return null;
+        }
+        return fileData;
+    }
+
+    /**
+     * in CBLDatabase+Attachments.m
+     * - (NSURL*) fileForAttachmentDict: (NSDictionary*)attachmentDict
+     */
+    @InterfaceAudience.Private
+    public URL fileForAttachmentDict(Map<String,Object> attachmentDict) {
+        String digest = (String)attachmentDict.get("digest");
+        if (digest == null) {
+            return null;
+        }
+        String path = null;
+        Object pending = pendingAttachmentsByDigest.get(digest);
+        if (pending != null) {
+            if (pending instanceof BlobStoreWriter) {
+                path = ((BlobStoreWriter) pending).getFilePath();
+            } else {
+                BlobKey key = new BlobKey((byte[])pending);
+                path = attachments.pathForKey(key);
+            }
+        } else {
+            // If it's an installed attachment, ask the blob-store for it:
+            BlobKey key = new BlobKey(digest);
+            path = attachments.pathForKey(key);
+        }
+
+        URL retval = null;
+        try {
+            retval = new File(path).toURI().toURL();
+        } catch (MalformedURLException e) {
+            //NOOP: retval will be null
+        }
+        return retval;
+    }
+
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    public void processAttachmentsForRevision(Map<String, AttachmentInternal> attachments, RevisionInternal rev, long parentSequence) throws CouchbaseLiteException {
+        throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
+    }
+
+    /**
+     * Given a revision, updates its _attachments dictionary for storage in the database.
+     *
+     * in CBLDatabase+Attachments.m
+     * - (BOOL) processAttachmentsForRevision: (CBL_MutableRevision*)rev
+     *                              prevRevID: (NSString*)prevRevID
+     *                                 status: (CBLStatus*)outStatus
+     */
+    @InterfaceAudience.Private
+    public boolean processAttachmentsForRevision(final RevisionInternal rev, final String prevRevID) throws CouchbaseLiteException{
+        Status outStatus = new Status(Status.OK);
+
+        final Map<String, Object> attachments = rev.getAttachments();
+        if(attachments == null)
+            return true; // no-op: no attachments
+
+        // Deletions can't have attachments:
+        if(rev.isDeleted() || attachments.size() == 0){
+            Map<String, Object> body = rev.getProperties();
+            body.remove("_attachments");
+            rev.setProperties(body);
+            return true;
+        }
+
+        final int generation = RevisionInternal.generationFromRevID(prevRevID) + 1;
+        // initialize here because unable to initialize in inner class
+        //final Map<String, Map<String, Object>> parentAttachments = null;
+        final Map<String, Map<String, Object>> parentAttachments = getAttachments(rev.getDocId(), prevRevID);;
+
+        return rev.mutateAttachments(new CollectionUtils.Functor<Map<String,Object>,Map<String,Object>>() {
+
+            public Map<String, Object> invoke(Map<String, Object> attachInfo) {
+                try {
+                    String name = (String)attachInfo.get("name");
+                    AttachmentInternal attachment = new AttachmentInternal(name, attachInfo);
+
+                    if(attachment == null){
+                        return null;
+                    }
+                    else if(attachment.getData()!=null){
+                        // If there's inline attachment data, decode and store it:
+                        BlobKey outBlobKey = new BlobKey();
+                        boolean storedBlob = getAttachments().storeBlob(attachment.getData(), outBlobKey);
+                        attachment.setBlobKey(outBlobKey);
+                        if (!storedBlob) {
+                            throw new CouchbaseLiteException(Status.STATUS_ATTACHMENT_ERROR);
+                        }
+                    }
+                    else if (attachInfo.containsKey("follows") &&
+                            ((Boolean)attachInfo.get("follows")).booleanValue()) {
+                        // "follows" means the uploader provided the attachment in a separate MIME part.
+                        // This means it's already been registered in _pendingAttachmentsByDigest;
+                        // I just need to look it up by its "digest" property and install it into the store:
+                        installAttachment(attachment, attachInfo);
+                    }
+                    else if (attachInfo.containsKey("stub") &&
+                            ((Boolean)attachInfo.get("stub")).booleanValue()) {
+                        // "stub" on an incoming revision means the attachment is the same as in the parent.
+                        if(parentAttachments == null && prevRevID != null && prevRevID.length() > 0){
+                            //parentAttachments = getAttachments(rev.getDocId(), prevRevID);
+                            if(parentAttachments == null){
+                                throw new CouchbaseLiteException(Status.BAD_ATTACHMENT);
+                            }
+                        }
+                        Map<String, Object> parentAttachment = parentAttachments.get(name);
+                        if(parentAttachment==null)
+                            return null;
+                        return parentAttachment;
+                    }
+
+                    // Set or validate the revpos:
+                    if(attachment.getRevpos() == 0) {
+                        attachment.setRevpos(generation);
+                    }
+                    else if(attachment.getRevpos() >= generation) {
+                        return null;
+                    }
+                    return attachment.asStubDictionary();
+                } catch (CouchbaseLiteException e) {
+                    e.printStackTrace();
+                    return null;
+                }
+            }
+        });
+    }
+
+
+    // pragma mark - MISC.:
+
+    /**
+     *  Replaces or removes a single attachment in a document, by saving a new revision whose only
+     *  change is the value of the attachment.
+     *
+     * in CBLDatabase+Attachments.m
+     * - (CBL_Revision*) updateAttachment: (NSString*)filename
+     *                               body: (CBL_BlobStoreWriter*)body
+     *                               type: (NSString*)contentType
+     *                           encoding: (CBLAttachmentEncoding)encoding
+     *                            ofDocID: (NSString*)docID
+     *                              revID: (NSString*)oldRevID
+     *                             status: (CBLStatus*)outStatus
+     */
+    @InterfaceAudience.Private
+    public RevisionInternal updateAttachment(String filename, BlobStoreWriter body, String contentType, AttachmentInternal.AttachmentEncoding encoding, String docID, String oldRevID) throws CouchbaseLiteException {
+
+        if(filename == null || filename.length() == 0 || (body != null && contentType == null) || (oldRevID != null && docID == null) || (body != null && docID == null)) {
+            throw new CouchbaseLiteException(Status.BAD_REQUEST);
+        }
+
+        RevisionInternal oldRev = new RevisionInternal(docID, oldRevID, false);
+
+        if(oldRevID != null) {
+            // Load existing revision if this is a replacement:
+            try {
+                loadRevisionBody(oldRev, EnumSet.noneOf(TDContentOptions.class));
+            } catch (CouchbaseLiteException e) {
+                if (e.getCBLStatus().getCode() == Status.NOT_FOUND && existsDocumentWithIDAndRev(docID, null) ) {
+                    throw new CouchbaseLiteException(Status.CONFLICT);
+                }
+            }
+        } else {
+            // If this creates a new doc, it needs a body:
+            oldRev.setBody(new Body(new HashMap<String,Object>()));
+        }
+
+        // Update the _attachments dictionary:
+        Map<String,Object> attachments = oldRev.getAttachments();
+        if (attachments == null)
+            attachments = new HashMap<String, Object>();
+        if (body != null) {
+            BlobKey key = body.getBlobKey();
+            String digest = key.base64Digest();
+
+            Map<String, BlobStoreWriter> blobsByDigest = new HashMap<String, BlobStoreWriter>();
+            blobsByDigest.put(digest,body);
+            rememberAttachmentWritersForDigests(blobsByDigest);
+
+            String encodingName = (encoding == AttachmentInternal.AttachmentEncoding.AttachmentEncodingGZIP) ? "gzip" : null;
+            Map<String,Object> dict = new HashMap<String, Object>();
+            dict.put("digest", digest);
+            dict.put("length", body.getLength());
+            dict.put("follows", true);
+            dict.put("content_type", contentType);
+            dict.put("encoding", encodingName);
+            attachments.put(filename, dict);
+        }
+        else{
+            if (oldRevID != null && !attachments.containsKey(filename) ) {
+                throw new CouchbaseLiteException(Status.NOT_FOUND);
+            }
+            attachments.remove(filename);
+        }
+
+        Map<String, Object> properties = oldRev.getProperties();
+        properties.put("_attachments",attachments);
+        oldRev.setProperties(properties);
+
+        // Store a new revision with the updated _attachments:
+        Status putStatus = new Status();
+        RevisionInternal newRev = putRevision(oldRev, oldRevID, false, putStatus);
+        if(body == null && putStatus.getCode() == Status.CREATED)
+            putStatus.setCode(Status.OK);
+
+        return newRev;
+    }
+
+
     //================================================================================
     // CBLDatabase+Insertion (Database/CBLDatabase+Insertion.m)
     //================================================================================
+
+    // pragma mark - INSERTION:
+
+    // Backward compatibility
+    @InterfaceAudience.Private
+    public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, Status resultStatus) throws CouchbaseLiteException {
+        return putRevision(rev, prevRevId, false, resultStatus);
+    }
+
+    // Backward compatibility
+    @InterfaceAudience.Private
+    public RevisionInternal putRevision(RevisionInternal rev, String prevRevId, boolean allowConflict) throws CouchbaseLiteException {
+        Status ignoredStatus = new Status();
+        return putRevision(rev, prevRevId, allowConflict, ignoredStatus);
+    }
+
+    /**
+     * in CBLDatabase+Insertion.m  -
+     * - (CBL_Revision*) putRevision: (CBL_MutableRevision*)putRev
+     *                prevRevisionID: (NSString*)inPrevRevID
+     *                 allowConflict: (BOOL)allowConflict
+     *                        status: (CBLStatus*)outStatus
+     */
+    @InterfaceAudience.Private
+    public RevisionInternal putRevision(RevisionInternal putRev, String inPrevRevID, boolean allowConflict, Status outStatus) throws CouchbaseLiteException{
+        return putDoc(putRev.getDocId(), putRev.getProperties(), inPrevRevID, allowConflict, outStatus);
+    }
 
     /**
      * in CBLDatabase+Insertion.m  -
@@ -1360,7 +1788,7 @@ public class DatabaseCBForest implements Database {
         String docID = inDocID;
         String prevRevID = inPrevRevID;
         boolean deleting = false;
-        if(properties == null || (properties.get("cbl_deleted") != null && properties.get("cbl_deleted") == Boolean.TRUE)){
+        if(properties == null || (properties.get("_deleted") != null && properties.get("_deleted") == Boolean.TRUE)){
             deleting = true;
         }
 
@@ -1381,11 +1809,18 @@ public class DatabaseCBForest implements Database {
 
 
         byte[] json = null;
-        if(properties!=null){
-            // TODO: Attachment
+        if(properties != null){
+            if(properties.containsKey("_attachments")){
+                // Add any new attachment data to the blob-store, and turn all of them into stubs:
+                //FIX: Optimize this to avoid creating a revision object
+                RevisionInternal tmpRev = new RevisionInternal(docID, prevRevID, deleting);
+                tmpRev.setProperties(properties);
+                if(!processAttachmentsForRevision(tmpRev, prevRevID))
+                    return null;
+                properties = new HashMap<String, Object>(tmpRev.getProperties());
+            }
 
             // TODO: json = [CBL_Revision asCanonicalJSON: properties error: NULL];
-
             try {
                 json = Manager.getObjectMapper().writeValueAsBytes(properties);
                 if(json == null || json.length == 0)
@@ -1399,7 +1834,7 @@ public class DatabaseCBForest implements Database {
         }
 
 
-        Log.w(TAG, "[putDoc()] json => " + new String(json));
+        //Log.w(TAG, "[putDoc()] json => " + new String(json));
 
         beginTransaction();
         try{
@@ -1541,7 +1976,7 @@ public class DatabaseCBForest implements Database {
             notifyChange(change);
 
         Log.w(TAG, "[putDoc()] putRev => " + putRev);
-        Log.w(TAG, "[putDoc()] json => " + new String(json));
+        //Log.w(TAG, "[putDoc()] json => " + new String(json));
 
         return putRev;
     }
