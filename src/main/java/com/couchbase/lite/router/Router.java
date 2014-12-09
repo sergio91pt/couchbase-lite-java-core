@@ -1,7 +1,6 @@
 package com.couchbase.lite.router;
 
 
-import com.couchbase.lite.DatabaseUtil;
 import com.couchbase.lite.AsyncTask;
 import com.couchbase.lite.Attachment;
 import com.couchbase.lite.BlobStoreWriter;
@@ -9,6 +8,7 @@ import com.couchbase.lite.ChangesOptions;
 import com.couchbase.lite.CouchbaseLiteException;
 import com.couchbase.lite.Database;
 import com.couchbase.lite.Database.TDContentOptions;
+import com.couchbase.lite.DatabaseUtil;
 import com.couchbase.lite.DocumentChange;
 import com.couchbase.lite.Manager;
 import com.couchbase.lite.Mapper;
@@ -21,6 +21,7 @@ import com.couchbase.lite.RevisionList;
 import com.couchbase.lite.Status;
 import com.couchbase.lite.View;
 import com.couchbase.lite.View.TDViewCollation;
+import com.couchbase.lite.ViewUtil;
 import com.couchbase.lite.auth.FacebookAuthorizer;
 import com.couchbase.lite.auth.PersonaAuthorizer;
 import com.couchbase.lite.internal.AttachmentInternal;
@@ -1646,7 +1647,7 @@ public class Router implements Database.ChangeListener {
         if(mapSource == null) {
             return null;
         }
-        Mapper mapBlock = View.getCompiler().compileMap(mapSource, language);
+        Mapper mapBlock = ViewUtil.getCompiler().compileMap(mapSource, language);
         if(mapBlock == null) {
             Log.w(Log.TAG_ROUTER, "View %s has unknown map function: %s", viewName, mapSource);
             return null;
@@ -1654,7 +1655,7 @@ public class Router implements Database.ChangeListener {
         String reduceSource = (String)viewProps.get("reduce");
         Reducer reduceBlock = null;
         if(reduceSource != null) {
-            reduceBlock = View.getCompiler().compileReduce(reduceSource, language);
+            reduceBlock = ViewUtil.getCompiler().compileReduce(reduceSource, language);
             if(reduceBlock == null) {
                 Log.w(Log.TAG_ROUTER, "View %s has unknown reduce function: %s", viewName, reduceBlock);
                 return null;

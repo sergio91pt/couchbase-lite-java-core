@@ -520,7 +520,7 @@ public final class DatabaseSQLite implements Database {
         if(view != null) {
             return view;
         }
-        return registerView(new View(this, name));
+        return registerView(new ViewSQLite(this, name));
     }
 
     /**
@@ -537,7 +537,7 @@ public final class DatabaseSQLite implements Database {
         }
 
         //view is not in cache but it maybe in DB
-        view = new View(this, name);
+        view = new ViewSQLite(this, name);
         if(view.getViewId() > 0) {
             return view;
         }
