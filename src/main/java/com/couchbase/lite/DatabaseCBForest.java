@@ -243,13 +243,9 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public View getView(String name) {
-        return null;
-    }
 
-    public View getExistingView(String name) {
-        return null;
-    }
+
+
 
     public Validator getValidation(String name) {
         Validator result = null;
@@ -363,9 +359,7 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public View registerView(View view) {
-        return null;
-    }
+
 
     public List<QueryRow> queryViewNamed(String viewName, QueryOptions options, List<Long> outLastSequence) throws CouchbaseLiteException {
         return null;
@@ -814,6 +808,69 @@ public class DatabaseCBForest implements Database {
 
 
 
+    // pragma mark - VIEWS:
+
+
+    /**
+     * in CBLDatabase.m
+     * - (CBLView*) registerView: (CBLView*)view
+     */
+    @InterfaceAudience.Public
+    public View registerView(View view) {
+        if(view == null) {
+            return null;
+        }
+        if(views == null) {
+            views = new HashMap<String,View>();
+        }
+        views.put(view.getName(), view);
+        return view;
+    }
+
+    /**
+     * Returns the existing View with the given name, or nil if none.
+     *
+     * in CBLDatabase.m
+     * - (CBLView*) existingViewNamed: (NSString*)name
+     */
+    @InterfaceAudience.Public
+    public View getExistingView(String name) {
+        View view = null;
+        if(views != null) {
+            view = views.get(name);
+        }
+        if(view != null) {
+            return view;
+        }
+
+        //view is not in cache but it maybe in DB
+        view = new View(this, name);
+        if(view.getViewId() > 0) {
+            return view;
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns a View object for the view with the given name.
+     * (This succeeds even if the view doesn't already exist, but the view won't be added to
+     * the database until the View is assigned a map function.)
+     *
+     * in CBLDatabase.m
+     * - (CBLView*) viewNamed: (NSString*)name
+     */
+    @InterfaceAudience.Public
+    public View getView(String name) {
+        View view = null;
+        if(views != null) {
+            view = views.get(name);
+        }
+        if(view != null) {
+            return view;
+        }
+        return registerView(new View(this, name));
+    }
 
     // pragma mark - VALIDATION & FILTERS:
 
