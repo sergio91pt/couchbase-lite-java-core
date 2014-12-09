@@ -89,6 +89,18 @@ public class RevisionList extends ArrayList<RevisionInternal> {
         });
     }
 
+    /**
+     * in CBL_Revision.m
+     * - (void) sortByDocID
+     */
+    public void sortByDocID() {
+        Collections.sort(this, new Comparator<RevisionInternal>() {
+            public int compare(RevisionInternal rev1, RevisionInternal rev2) {
+                return rev1.getDocId().compareTo(rev2.getDocId());
+            }
+        });
+    }
+
     public void limit(int limit) {
         if(size() > limit) {
             removeRange(limit, size());

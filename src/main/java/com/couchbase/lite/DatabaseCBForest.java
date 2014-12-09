@@ -15,6 +15,7 @@ import com.couchbase.lite.internal.Body;
 import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.replicator.Replication;
+import com.couchbase.lite.replicator.ReplicationState;
 import com.couchbase.lite.storage.SQLException;
 import com.couchbase.lite.storage.SQLiteStorageEngine;
 import com.couchbase.lite.support.Base64;
@@ -72,14 +73,15 @@ public class DatabaseCBForest implements Database {
 
     private Map<String, Validator> validations = null;
     final private CopyOnWriteArrayList<ChangeListener> changeListeners;
-
     private List<DocumentChange> changesToNotify;
     private boolean postingChangeNotifications = false;
 
     /**
      * Variables defined in CBLDatabase.h or .m
      */
-    private Cache<String, Document> docCache;
+    private static ReplicationFilterCompiler filterCompiler = null;
+
+    private Cache<String, Document> docCache = null;
     private Set<Replication> allReplicators = null;
     private int maxRevTreeDepth = DEFAULT_MAX_REVS;
 
@@ -103,6 +105,31 @@ public class DatabaseCBForest implements Database {
 
 
 
+    /**
+     * Variables defined for Java/Android only
+     */
+
+    private Map<String, ReplicationFilter> filters;
+
+    /**
+     * Each database can have an associated PersistentCookieStore,
+     * where the persistent cookie store uses the database to store
+     * its cookies.
+     *
+     * There are two reasons this has been made an instance variable
+     * of the Database, rather than of the Replication:
+     *
+     * - The PersistentCookieStore needs to span multiple replications.
+     * For example, if there is a "push" and a "pull" replication for
+     * the same DB, they should share a cookie store.
+     *
+     * - PersistentCookieStore lifecycle should be tied to the Database
+     * lifecycle, since it needs to cease to exist if the underlying
+     * Database ceases to exist.
+     *
+     * REF: https://github.com/couchbase/couchbase-lite-android/issues/269
+     */
+    private PersistentCookieStore persistentCookieStore;
 
 
 
@@ -170,17 +197,7 @@ public class DatabaseCBForest implements Database {
         return isOpen;
     }
 
-    /**
-     * Get all the replicators associated with this database.
-     */
-    @InterfaceAudience.Public
-    public List<Replication> getAllReplications() {
-        List<Replication> allReplicatorsList =  new ArrayList<Replication>();
-        if (allReplicators != null) {
-            allReplicatorsList.addAll(allReplicators);
-        }
-        return allReplicatorsList;
-    }
+
 
     /**
      * Compacts the database file by purging non-current JSON bodies, pruning revisions older than
@@ -254,13 +271,7 @@ public class DatabaseCBForest implements Database {
         }
     }
 
-    public ReplicationFilter getFilter(String filterName) {
-        return null;
-    }
 
-    public void setFilter(String filterName, ReplicationFilter filter) {
-
-    }
 
 
 
@@ -268,46 +279,10 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public Replication createPushReplication(URL remote) {
-        return null;
-    }
 
-    public Replication createPullReplication(URL remote) {
-        return null;
-    }
 
-    // NOTE: Same with SQLite?
-    @InterfaceAudience.Public
-    public void addChangeListener(ChangeListener listener) {
-        changeListeners.addIfAbsent(listener);
-    }
 
-    // NOTE: Same with SQLite?
-    @InterfaceAudience.Public
-    public void removeChangeListener(ChangeListener listener) {
-        changeListeners.remove(listener);
-    }
 
-    // NOTE: Same with SQLite?
-    public int getMaxRevTreeDepth() {
-        return maxRevTreeDepth;
-    }
-    // NOTE: Same with SQLite?
-    public void setMaxRevTreeDepth(int maxRevTreeDepth) {
-        this.maxRevTreeDepth = maxRevTreeDepth;
-    }
-    // NOTE: Same with SQLite?
-    public Document getCachedDocument(String documentID) {
-        return docCache.get(documentID);
-    }
-    // NOTE: Same with SQLite?
-    public void clearDocumentCache() {
-        docCache.clear();
-    }
-
-    public List<Replication> getActiveReplications() {
-        return null;
-    }
 
     // NOTE: Same with SQLite?
     public void removeDocumentFromCache(Document document) {
@@ -384,13 +359,7 @@ public class DatabaseCBForest implements Database {
         return DatabaseUtil.makeRevisionHistoryDict(getRevisionHistory(rev));
     }
 
-    /**
-     * backward compatibility
-     */
-    @InterfaceAudience.Private
-    public RevisionList changesSince(long lastSeq, ChangesOptions options, ReplicationFilter filter) {
-        return changesSince(lastSeq, options, filter, null);
-    }
+
 
     public String getDesignDocFunction(String fnName, String key, List<String> outLanguageList) {
         return null;
@@ -451,9 +420,7 @@ public class DatabaseCBForest implements Database {
 
     }
 
-    public boolean inlineFollowingAttachmentsIn(RevisionInternal rev) {
-        return false;
-    }
+
 
 
 
@@ -605,21 +572,8 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public String lastSequenceWithCheckpointId(String checkpointId) {
-        return null;
-    }
 
-    public boolean setLastSequence(String lastSequence, String checkpointId, boolean push) {
-        return false;
-    }
 
-    public String getLastSequenceStored(String checkpointId, boolean push) {
-        return null;
-    }
-
-    public int findMissingRevisions(RevisionList touchRevs) throws SQLException {
-        return 0;
-    }
 
     public Query slowQuery(Mapper map) {
         return null;
@@ -650,34 +604,11 @@ public class DatabaseCBForest implements Database {
         this.name = name;
     }
 
-    // TODO not used for Forestdb
-    public int pruneRevsToMaxDepth(int maxDepth) throws CouchbaseLiteException {
-        return 0;
-    }
 
-    /**
-     * Is the database open?
-     */
-    @InterfaceAudience.Private
-    public boolean isOpen() {
-        return isOpen;
-    }
 
-    public void addReplication(Replication replication) {
 
-    }
 
-    public void forgetReplication(Replication replication) {
 
-    }
-
-    public void addActiveReplication(Replication replication) {
-
-    }
-
-    public PersistentCookieStore getPersistentCookieStore() {
-        return null;
-    }
 
     // SAME
     @InterfaceAudience.Private
@@ -755,6 +686,18 @@ public class DatabaseCBForest implements Database {
         postChangeNotifications();
     }
 
+
+
+
+
+
+
+
+
+
+
+
+
     //================================================================================
     // CBLDatabase (API/CBLDatabase.m)
     //================================================================================
@@ -775,6 +718,17 @@ public class DatabaseCBForest implements Database {
     @InterfaceAudience.Public
     public String getPath() {
         return dir;
+    }
+
+    /**
+     * Is the database open?
+     *
+     * in CBLDatabase.m
+     * @synthesize isOpen=_isOpen;
+     */
+    @InterfaceAudience.Private
+    public boolean isOpen() {
+        return isOpen;
     }
 
     /**
@@ -860,6 +814,156 @@ public class DatabaseCBForest implements Database {
     @InterfaceAudience.Public
     static String makeLocalDocID(String documentId) {
         return String.format("_local/%s", documentId);
+    }
+
+
+
+
+    // pragma mark - VALIDATION & FILTERS:
+
+
+    /**
+     * Returns the existing filter function (block) registered with the given name.
+     * Note that filters are not persistent -- you have to re-register them on every launch.
+     *
+     * in CBLDatabase.m
+     * - (CBLFilterBlock) filterNamed: (NSString*)filterName
+     */
+    @InterfaceAudience.Public
+    public ReplicationFilter getFilter(String filterName) {
+        ReplicationFilter result = null;
+        if(filters != null) {
+            result = filters.get(filterName);
+        }
+        if (result == null) {
+            ReplicationFilterCompiler filterCompiler = getFilterCompiler();
+            if (filterCompiler == null) {
+                return null;
+            }
+
+            List<String> outLanguageList = new ArrayList<String>();
+            String sourceCode = getDesignDocFunction(filterName, "filters", outLanguageList);
+            if (sourceCode == null) {
+                return null;
+            }
+            String language = outLanguageList.get(0);
+            ReplicationFilter filter = filterCompiler.compileFilterFunction(sourceCode, language);
+            if (filter == null) {
+                Log.w(Database.TAG, "Filter %s failed to compile", filterName);
+                return null;
+            }
+            setFilter(filterName, filter);
+            return filter;
+        }
+        return result;
+    }
+
+    /**
+     * Define or clear a named filter function.
+     *
+     * Filters are used by push replications to choose which documents to send.
+     *
+     * in CBLDatabase.m
+     * - (void) setFilterNamed: (NSString*)filterName asBlock: (CBLFilterBlock)filterBlock
+     */
+    @InterfaceAudience.Public
+    public void setFilter(String filterName, ReplicationFilter filter) {
+        if(filters == null) {
+            filters = new HashMap<String,ReplicationFilter>();
+        }
+        if (filter != null) {
+            filters.put(filterName, filter);
+        }
+        else {
+            filters.remove(filterName);
+        }
+    }
+
+    /**
+     * Returns the currently registered filter compiler (nil by default).
+     *
+     * in CBLDatabase.m
+     * + (id<CBLFilterCompiler>) filterCompiler
+     */
+    @InterfaceAudience.Public
+    public static ReplicationFilterCompiler getFilterCompiler() {
+        return DatabaseCBForest.filterCompiler;
+    }
+
+    /**
+     * Registers an object that can compile source code into executable filter blocks.
+     * in CBLDatabase.m
+     * + (void) setFilterCompiler: (id<CBLFilterCompiler>)compiler
+     */
+    @InterfaceAudience.Public
+    public static void setFilterCompiler(ReplicationFilterCompiler filterCompiler) {
+        DatabaseCBForest.filterCompiler = filterCompiler;
+    }
+
+
+    // pragma mark - REPLICATION:
+
+    /**
+     * Get all the replicators associated with this database.
+     *
+     * CBLDatabase.m
+     * - (NSArray*) allReplications
+     */
+    @InterfaceAudience.Public
+    public List<Replication> getAllReplications() {
+        List<Replication> allReplicatorsList =  new ArrayList<Replication>();
+        if (allReplicators != null) {
+            allReplicatorsList.addAll(allReplicators);
+        }
+        return allReplicatorsList;
+    }
+
+    /**
+     * CBLDatabase.m
+     * - (void) addReplication: (CBLReplication*)repl
+     */
+    @InterfaceAudience.Public
+    public void addReplication(Replication replication) {
+        if (allReplicators != null) {
+            allReplicators.add(replication);
+        }
+    }
+
+    /**
+     * CBLDatabase.m
+     * - (void) forgetReplication: (CBLReplication*)repl
+     */
+    @InterfaceAudience.Public
+    public void forgetReplication(Replication replication) {
+        allReplicators.remove(replication);
+    }
+
+    /**
+     * Creates a new Replication that will push to the target Database at the given url.
+     *
+     * @param remote the remote URL to push to
+     * @return A new Replication that will push to the target Database at the given url.
+     *
+     * CBLDatabase.m
+     * - (CBLReplication*) createPushReplication: (NSURL*)url
+     */
+    @InterfaceAudience.Public
+    public Replication createPushReplication(URL remote) {
+        return new Replication(this, remote, Replication.Direction.PUSH, null, manager.getWorkExecutor());
+    }
+
+    /**
+     * Creates a new Replication that will pull from the source Database at the given url.
+     *
+     * @param remote the remote URL to pull from
+     * @return A new Replication that will pull from the source Database at the given url.
+     *
+     * CBLDatabase.m
+     * - (CBLReplication*) createPullReplication: (NSURL*)url
+     */
+    @InterfaceAudience.Public
+    public Replication createPullReplication(URL remote) {
+        return new Replication(this, remote, Replication.Direction.PULL, null, manager.getWorkExecutor());
     }
 
     //================================================================================
@@ -1224,6 +1328,14 @@ public class DatabaseCBForest implements Database {
     }
 
     /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    public RevisionList changesSince(long lastSeq, ChangesOptions options, ReplicationFilter filter) {
+        return changesSince(lastSeq, options, filter, null);
+    }
+
+    /**
      * in CBLDatabase+Internal.m
      * - (CBL_RevisionList*) changesSinceSequence: (SequenceNumber)lastSequence
      *                                    options: (const CBLChangesOptions*)options
@@ -1566,6 +1678,42 @@ public class DatabaseCBForest implements Database {
         }
         return retval;
     }
+
+
+
+    /**
+     * Replaces the "follows" key with the real attachment data in all attachments to 'doc'.
+     *
+     * in CBLDatabase+Attachments.m
+     * - (BOOL) inlineFollowingAttachmentsIn: (CBL_MutableRevision*)rev error: (NSError**)outError
+     */
+    @InterfaceAudience.Private
+    public boolean inlineFollowingAttachmentsIn(RevisionInternal rev) {
+        return rev.mutateAttachments(new CollectionUtils.Functor<Map<String, Object>, Map<String, Object>>() {
+            public Map<String, Object> invoke(Map<String, Object> attachment) {
+                if (!attachment.containsKey("follows")) {
+                    return attachment;
+                }
+                URL fileURL = fileForAttachmentDict(attachment);
+                byte[] fileData = null;
+                try {
+                    InputStream is = fileURL.openStream();
+                    ByteArrayOutputStream os = new ByteArrayOutputStream();
+                    StreamUtils.copyStream(is,os);
+                    fileData = os.toByteArray();
+                } catch (IOException e) {
+                    Log.e(Log.TAG_SYNC,"could not retrieve attachment data: %S",e);
+                    return null;
+                }
+
+                Map<String, Object> editedAttachment = new HashMap<String, Object>(attachment);
+                editedAttachment.remove("follows");
+                editedAttachment.put("data",Base64.encodeBytes(fileData));
+                return editedAttachment;
+            }
+        });
+    }
+
 
     /**
      * backward compatibility
@@ -2128,6 +2276,129 @@ public class DatabaseCBForest implements Database {
     // CBLDatabase+Replication (Database/CBLDatabase+Replication.m)
     //================================================================================
 
+    /**
+     * Get all the active replicators associated with this database.
+     *
+     * in CBLDatabase+Replication.m
+     * - (NSArray*) activeReplicators
+     */
+    @InterfaceAudience.Private
+    public List<Replication> getActiveReplications() {
+        List<Replication> activeReplicatorsList =  new ArrayList<Replication>();
+        if (activeReplicators != null) {
+            activeReplicatorsList.addAll(activeReplicators);
+        }
+        return activeReplicatorsList;
+    }
+
+    /**
+     * Get all the active replicators associated with this database.
+     *
+     * in CBLDatabase+Replication.m
+     * - (void) addActiveReplicator: (CBL_Replicator*)repl
+     */
+    @InterfaceAudience.Private
+    public void addActiveReplication(Replication replication) {
+        replication.addChangeListener(new Replication.ChangeListener() {
+            @Override
+            public void changed(Replication.ChangeEvent event) {
+                if (event.getTransition() != null && event.getTransition().getDestination() == ReplicationState.STOPPED) {
+                    if (activeReplicators != null) {
+                        activeReplicators.remove(event.getSource());
+                    }
+                }
+            }
+        });
+
+        if (activeReplicators != null) {
+            activeReplicators.add(replication);
+        }
+    }
+
+
+    /**
+     * in CBLDatabase+Replication.m
+     * - (BOOL) setLastSequence: (NSString*)lastSequence withCheckpointID: (NSString*)checkpointID
+     */
+    @InterfaceAudience.Private
+    private static String checkpointInfoKey(String checkpointID){
+        StringBuffer sb = new StringBuffer("checkpoint/");
+        sb.append(checkpointID);
+        return sb.toString();
+    }
+
+    /**
+     * in CBLDatabase+Replication.m
+     * - (BOOL) setLastSequence: (NSString*)lastSequence withCheckpointID: (NSString*)checkpointID
+     */
+    @InterfaceAudience.Private
+    public String lastSequenceWithCheckpointId(String checkpointId) {
+        return getInfo(checkpointInfoKey(checkpointId));
+    }
+
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    public String getLastSequenceStored(String checkpointId, boolean push) {
+        return lastSequenceWithCheckpointId(checkpointId);
+    }
+
+    /**
+     * in CBLDatabase+Replication.m
+     * - (BOOL) setLastSequence: (NSString*)lastSequence withCheckpointID: (NSString*)checkpointID
+     */
+    @InterfaceAudience.Private
+    public boolean setLastSequence(String lastSequence, String checkpointId) {
+        return setInfo(lastSequence, checkpointInfoKey(checkpointId)).equals(Status.OK);
+    }
+
+    /**
+     * backward compatibility
+     */
+    @InterfaceAudience.Private
+    public boolean setLastSequence(String lastSequence, String checkpointId, boolean push) {
+        return setLastSequence(lastSequence, checkpointId);
+    }
+
+    /**
+     * in CBLDatabase+Replication.m
+     * - (BOOL) findMissingRevisions: (CBL_RevisionList*)revs
+     *                        status: (CBLStatus*)outStatus
+     */
+    @InterfaceAudience.Private
+    public int findMissingRevisions(RevisionList revs) throws SQLException {
+        int numRevisionsRemoved = 0;
+        if(revs.size() == 0) {
+            return numRevisionsRemoved;
+        }
+
+        revs.sortByDocID();
+        VersionedDocument doc = null;
+        String lastDocID = null;
+        for(int i = revs.size() - 1; i >= 0; i--){
+            RevisionInternal rev = revs.get(i);
+            if(!rev.getDocId().equals(lastDocID)){
+                lastDocID = rev.getDocId();
+                if(doc!=null) {
+                    doc.delete();
+                }
+                doc = new VersionedDocument(forest, new Slice(lastDocID.getBytes()));
+                if(doc != null){
+                    if(doc.get(new RevIDBuffer(new Slice(rev.getRevId().getBytes())))!=null){
+                        revs.remove(rev);
+                        numRevisionsRemoved += 1;
+                    }
+                }
+            }
+        }
+        if(doc!=null) {
+            doc.delete();
+        }
+        return numRevisionsRemoved;
+    }
+
+
     //================================================================================
     // CBLDatabase+LocalDocs (Database/CBLDatabase+LocalDocs.m)
     //================================================================================
@@ -2361,7 +2632,85 @@ public class DatabaseCBForest implements Database {
         return false;
     }
 
+    //================================================================================
+    // Java/Android only methods (Not found in iOS code)
+    //================================================================================
+
+    /**
+     * Adds a Database change delegate that will be called whenever a Document within the Database changes.
+     */
+    @InterfaceAudience.Public
+    public void addChangeListener(ChangeListener listener) {
+        changeListeners.addIfAbsent(listener);
+    }
+
+    /**
+     * Removes the specified delegate as a listener for the Database change event.
+     */
+    @InterfaceAudience.Public
+    public void removeChangeListener(ChangeListener listener) {
+        changeListeners.remove(listener);
+    }
+
+    /**
+     * Get the maximum depth of a document's revision tree (or, max length of its revision history.)
+     * Revisions older than this limit will be deleted during a -compact: operation.
+     * Smaller values save space, at the expense of making document conflicts somewhat more likely.
+     */
+    @InterfaceAudience.Public
+    public int getMaxRevTreeDepth() {
+        return maxRevTreeDepth;
+    }
+
+    /**
+     * Set the maximum depth of a document's revision tree (or, max length of its revision history.)
+     * Revisions older than this limit will be deleted during a -compact: operation.
+     * Smaller values save space, at the expense of making document conflicts somewhat more likely.
+     */
+    @InterfaceAudience.Public
+    public void setMaxRevTreeDepth(int maxRevTreeDepth) {
+        this.maxRevTreeDepth = maxRevTreeDepth;
+    }
+
+    /**
+     * Returns the already-instantiated cached Document with the given ID, or nil if none is yet cached.
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public Document getCachedDocument(String documentID) {
+        return docCache.get(documentID);
+    }
+
+    /**
+     * Empties the cache of recently used Document objects.
+     * API calls will now instantiate and return new instances.
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public void clearDocumentCache() {
+        docCache.clear();
+    }
+
+    /**
+     * Get the PersistentCookieStore associated with this database.
+     * Will lazily create one if none exists.
+     */
+    @InterfaceAudience.Private
+    public PersistentCookieStore getPersistentCookieStore() {
+        if (persistentCookieStore == null) {
+            persistentCookieStore = new PersistentCookieStore(this);
+        }
+        return persistentCookieStore;
+    }
+
+    //================================================================================
+    // No longer supported by CBL forestdb version
+    //================================================================================
 
 
+    @InterfaceAudience.Private
+    public int pruneRevsToMaxDepth(int maxDepth) throws CouchbaseLiteException {
+        throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
+    }
 }
 
