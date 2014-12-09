@@ -319,9 +319,7 @@ public class DatabaseCBForest implements Database {
 
 
 
-    public long getDocNumericID(String docId) {
-        return 0;
-    }
+
 
     // TODO: Do we need this?
     public RevisionList getAllRevisionsOfDocumentID(String docId, long docNumericID, boolean onlyCurrent) {
@@ -393,9 +391,7 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public String winningRevIDOfDoc(long docNumericId, AtomicBoolean outIsDeleted, AtomicBoolean outIsConflict) throws CouchbaseLiteException {
-        return null;
-    }
+
 
 
 
@@ -2603,6 +2599,9 @@ public class DatabaseCBForest implements Database {
      */
     @InterfaceAudience.Private
     Status setInfo(String key, String info){
+        if(key == null || key.isEmpty() || info == null||info.isEmpty())
+            return new Status(Status.BAD_PARAM);
+
         Transaction t = new Transaction(getLocalDocs());
         t.set(new Slice(key.getBytes()), new Slice(info.getBytes()));
         t.delete();
@@ -2710,6 +2709,16 @@ public class DatabaseCBForest implements Database {
 
     @InterfaceAudience.Private
     public int pruneRevsToMaxDepth(int maxDepth) throws CouchbaseLiteException {
+        throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
+    }
+
+    @InterfaceAudience.Private
+    public long getDocNumericID(String docId){
+        return -1;
+    }
+
+    @InterfaceAudience.Private
+    public String winningRevIDOfDoc(long docNumericId, AtomicBoolean outIsDeleted, AtomicBoolean outIsConflict) throws CouchbaseLiteException {
         throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
     }
 }
