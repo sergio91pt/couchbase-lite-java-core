@@ -7,6 +7,7 @@ import com.couchbase.lite.internal.InterfaceAudience;
 import com.couchbase.lite.internal.RevisionInternal;
 import com.couchbase.lite.util.Log;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -107,6 +108,44 @@ public class ForestBridge {
 
         return true;
     }
+    /**
+     * in CBLForestBridge.m
+     * + (NSDictionary*) bodyOfNode: (const Revision*)rev
+     *                      options: (CBLContentOptions)options
+     *
+     * Note: Unable to downcast from RevTree to VersionedDocument
+     *        Instead of downcast, add VersionedDocument parameter
+     */
+    public static Map<String, Object> bodyOfNode(com.couchbase.lite.cbforest.Revision rev,
+                                 EnumSet<Database.TDContentOptions> options,
+                                 VersionedDocument doc){
+
+        // If caller wants no body and no metadata props, this is a no-op:
+        if(options.size() == 1 && options.contains(Database.TDContentOptions.TDNoBody)) {
+            return new HashMap();
+        }
+
+        byte[] json = null;
+        if(!options.contains(Database.TDContentOptions.TDNoBody)) {
+            json = dataOfNode(rev);
+            if(json == null)
+                return null;
+        }
+
+        Map<String, Object> properties = null;
+        try {
+            properties = Manager.getObjectMapper().readValue(json, Map.class);
+        } catch (IOException e) {
+            Log.w(TAG, e.getMessage());
+            return null;
+        }
+
+        addContentProperties(options, properties, rev, doc);
+        return properties;
+    }
+
+
+
 
     /**
      * in CBLForestBridge.m

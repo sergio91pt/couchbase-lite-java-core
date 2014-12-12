@@ -73,6 +73,7 @@ public final class Manager {
     private File directoryFile;
     private Map<String, Database> databases;
     private List<Replication> replications;
+    private Shared shared;
     private ScheduledExecutorService workExecutor;
     private HttpClientFactory defaultHttpClientFactory;
     private Context context;
@@ -121,6 +122,7 @@ public final class Manager {
         this.context = context;
         this.directoryFile = context.getFilesDir();
         this.options = (options != null) ? options : DEFAULT_OPTIONS;
+        this.shared = null;
         this.databases = new HashMap<String, Database>();
         this.replications = new ArrayList<Replication>();
 
@@ -375,6 +377,12 @@ public final class Manager {
         return databases.values();
     }
 
+    @InterfaceAudience.Private
+    public Shared getShared(){
+        if(shared==null)
+            shared = new Shared();
+        return shared;
+    }
 
     /**
      * Asynchronously dispatches a callback to run on a background thread. The callback will be passed
@@ -485,8 +493,8 @@ public final class Manager {
             if (path == null) {
                 return null;
             }
-            db = new DatabaseSQLite(path, this);
-            //db = new DatabaseCBForest(path, this);
+            //db = new DatabaseSQLite(path, this);
+            db = new DatabaseCBForest(path, this);
             if (mustExist && !db.exists()) {
                 Log.w(Database.TAG, "mustExist is true and db (%s) does not exist", name);
                 return null;

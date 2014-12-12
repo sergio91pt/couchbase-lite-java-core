@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Created by hideki on 11/22/14.
  */
 public class DatabaseCBForest implements Database {
+
     /** static constructor */
     static {
         try{
@@ -67,9 +68,11 @@ public class DatabaseCBForest implements Database {
         }
     }
 
+    public final static String TAG ="DatabaseCBForest";
+
     // Default value for maxRevTreeDepth, the max rev depth to preserve in a prune operation
     private static final int DEFAULT_MAX_REVS = Integer.MAX_VALUE;
-    public final static String TAG ="DatabaseCBForest";
+
 
     private Map<String, Validator> validations = null;
     final private CopyOnWriteArrayList<ChangeListener> changeListeners;
@@ -369,13 +372,8 @@ public class DatabaseCBForest implements Database {
         return null;
     }
 
-    public List<View> getAllViews() {
-        return null;
-    }
 
-    public Status deleteViewNamed(String name) {
-        return null;
-    }
+
 
     public int getDeletedColumnIndex(QueryOptions options) {
         return 0;
@@ -581,10 +579,7 @@ public class DatabaseCBForest implements Database {
         return false;
     }
 
-    @InterfaceAudience.Private
-    public long getStartTime() {
-        return this.startTime;
-    }
+
 
     /**
      * Set the database's name.
@@ -836,20 +831,19 @@ public class DatabaseCBForest implements Database {
     @InterfaceAudience.Public
     public View getExistingView(String name) {
         View view = null;
+
         if(views != null) {
-            view = views.get(name);
-        }
-        if(view != null) {
-            return view;
+            if((view = views.get(name))!=null)
+                return view;
         }
 
-        //view is not in cache but it maybe in DB
-        view = new ViewSQLite(this, name);
-        if(view.getViewId() > 0) {
-            return view;
+        try {
+            return registerView(new ViewCBForest(this, name, false));
+        } catch (CouchbaseLiteException e) {
+            //e.printStackTrace();
+            Log.w(TAG, "Unable to create View object");
+            return null;
         }
-
-        return null;
     }
 
     /**
@@ -863,13 +857,19 @@ public class DatabaseCBForest implements Database {
     @InterfaceAudience.Public
     public View getView(String name) {
         View view = null;
+
         if(views != null) {
-            view = views.get(name);
+            if((view = views.get(name))!=null)
+                return view;
         }
-        if(view != null) {
-            return view;
+
+        try {
+            return registerView(new ViewCBForest(this, name, true));
+        } catch (CouchbaseLiteException e) {
+            e.printStackTrace();
+            Log.w(TAG, "Unable to create View object");
+            return null;
         }
-        return registerView(new ViewSQLite(this, name));
     }
 
     // pragma mark - VALIDATION & FILTERS:
@@ -1057,6 +1057,14 @@ public class DatabaseCBForest implements Database {
     }
 
     /**
+     * in CBLDatabae+Internal.m
+     * - (Database*) forestDB
+     */
+    com.couchbase.lite.cbforest.Database getForestDB(){
+        return forest;
+    }
+
+    /**
      * CBLDatabase+Internal.m
      * - (CBL_BlobStore*) attachmentStore
      */
@@ -1064,6 +1072,25 @@ public class DatabaseCBForest implements Database {
     public BlobStore getAttachments() {
         return attachments;
     }
+
+    /**
+     * CBLDatabase+Internal.m
+     * - (NSDate*) startTime
+     */
+    @InterfaceAudience.Private
+    public long getStartTime() {
+        return this.startTime;
+    }
+
+    /**
+     * CBLDatabase+Internal.m
+     * - (CBL_Shared*)shared
+     */
+    @InterfaceAudience.Private
+    public Shared getShared() {
+        return manager.getShared();
+    }
+
 
     /**
      * CBLDatabase+Internal.m
@@ -1487,7 +1514,43 @@ public class DatabaseCBForest implements Database {
         return rev;
     }
 
+    // pragma mark - GETTING DOCUMENTS:
+
     // pragma mark - HISTORY:
+
+    // pragma mark - FILTERS:
+
+    // pragma mark - VIEWS:
+    // Note: Public view methods like -viewNamed: are in CBLDatabase.m.
+
+    /**
+     * in CBLDatabase+Internal.m
+     * - (NSArray*) allViews
+     */
+    @InterfaceAudience.Private
+    public List<View> getAllViews() {
+        List<View> views = new ArrayList<View>();
+        String[] fileNames = new File(dir).list();
+        for(String filename : fileNames){
+            String viewName = ViewCBForest.fileNameToViewName(filename);
+            if(viewName == null)
+                continue;
+            View view = getExistingView(viewName);
+            if(view!=null)
+                views.add(view);
+        }
+        return views;
+    }
+
+    /**
+     * in CBLDatabase+Internal.m
+     * - (void) forgetViewNamed: (NSString*)name
+     */
+    @InterfaceAudience.Private
+    public void forgetViewNamed(String name){
+        views.remove(name);
+    }
+
 
     //================================================================================
     // CBLDatabase+Attachments (Database/CBLDatabase+Attachments.m)
@@ -2759,6 +2822,8 @@ public class DatabaseCBForest implements Database {
         return persistentCookieStore;
     }
 
+
+
     //================================================================================
     // No longer supported by CBL forestdb version
     //================================================================================
@@ -2778,5 +2843,11 @@ public class DatabaseCBForest implements Database {
     public String winningRevIDOfDoc(long docNumericId, AtomicBoolean outIsDeleted, AtomicBoolean outIsConflict) throws CouchbaseLiteException {
         throw new CouchbaseLiteException(Status.METHOD_NOT_ALLOWED);
     }
+
+    @InterfaceAudience.Private
+    public Status deleteViewNamed(String name) {
+        return new Status(Status.METHOD_NOT_ALLOWED);
+    }
+
 }
 
