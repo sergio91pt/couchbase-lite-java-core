@@ -342,8 +342,9 @@ abstract class ReplicationInternal implements BlockingQueueListener{
     @InterfaceAudience.Private
     protected void checkSession() {
         // REVIEW : This is not in line with the iOS implementation
-        if (getAuthenticator() != null && ((AuthenticatorImpl)getAuthenticator()).usesCookieBasedLogin()) {
-            checkSessionAtPath("/_session");
+        AuthenticatorImpl authenticator = (AuthenticatorImpl) getAuthenticator();
+        if (authenticator != null && authenticator.usesCookieBasedLogin()) {
+            checkSessionAtPath(authenticator.sessionPathForSite(remote));
         } else {
             fetchRemoteCheckpointDoc();
         }

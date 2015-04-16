@@ -20,4 +20,8 @@ public abstract class AuthenticatorImpl implements Authenticator {
     public abstract String loginPathForSite(URL site);
 
     public abstract Map<String, String> loginParametersForSite(URL site);
+
+    public String sessionPathForSite(URL site) {
+        return "/_session";
+    }
 }
