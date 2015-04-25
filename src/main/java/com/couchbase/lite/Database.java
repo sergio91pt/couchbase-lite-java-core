@@ -1749,11 +1749,11 @@ public final class Database {
      */
     @InterfaceAudience.Private
     public RevisionInternal loadRevisionBody(RevisionInternal rev, EnumSet<TDContentOptions> contentOptions) throws CouchbaseLiteException {
-        if(rev.getBody() != null && contentOptions == EnumSet.noneOf(TDContentOptions.class) && rev.getSequence() != 0) {
+        if (rev.getBody() != null && contentOptions == EnumSet.noneOf(TDContentOptions.class) && rev.getSequence() != 0) {
             return rev;
         }
 
-        if((rev.getDocId() == null) || (rev.getRevId() == null)) {
+        if ((rev.getDocId() == null) || (rev.getRevId() == null)) {
             Log.e(Database.TAG, "Error loading revision body");
             throw new CouchbaseLiteException(Status.PRECONDITION_FAILED);
         }
@@ -1764,18 +1764,18 @@ public final class Database {
             // TODO: on ios this query is:
             // TODO: "SELECT sequence, json FROM revs WHERE doc_id=? AND revid=? LIMIT 1"
             String sql = "SELECT sequence, json FROM revs, docs WHERE revid=? AND docs.docid=? AND revs.doc_id=docs.doc_id LIMIT 1";
-            String[] args = { rev.getRevId(), rev.getDocId()};
+            String[] args = {rev.getRevId(), rev.getDocId()};
             cursor = database.rawQuery(sql, args);
-            if(cursor.moveToNext()) {
+            if (cursor.moveToNext()) {
                 result.setCode(Status.OK);
                 rev.setSequence(cursor.getLong(0));
                 expandStoredJSONIntoRevisionWithAttachments(cursor.getBlob(1), rev, contentOptions);
             }
-        } catch(SQLException e) {
+        } catch (SQLException e) {
             Log.e(Database.TAG, "Error loading revision body", e);
             throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
         } finally {
-            if(cursor != null) {
+            if (cursor != null) {
                 cursor.close();
             }
         }
@@ -3853,7 +3853,7 @@ public final class Database {
             //// PART II: In which we prepare for insertion...
 
             // Get the attachments:
-            Map<String, AttachmentInternal> attachments = getAttachmentsFromRevision(oldRev);
+            Map<String, AttachmentInternal> attachments = getAttachmentsFromRevision(oldRev, prevRevId);
 
             // Bump the revID and update the JSON:
             byte[] json = null;
@@ -4025,13 +4025,24 @@ public final class Database {
         return result;
     }
 
+    Map<String, Object> getAttachments(String docID, String revID) {
+        RevisionInternal mrev = new RevisionInternal(docID, revID, false);
+        try {
+            RevisionInternal rev = loadRevisionBody(mrev, EnumSet.noneOf(TDContentOptions.class));
+            return rev.getAttachments();
+        } catch (CouchbaseLiteException e) {
+            Log.w(Log.TAG_DATABASE, "Failed to get attachments for " + mrev, e);
+            return null;
+        }
+    }
+
     /**
      * Given a revision, read its _attachments dictionary (if any), convert each attachment to a
      * AttachmentInternal object, and return a dictionary mapping names->CBL_Attachments.
      * @exclude
      */
     @InterfaceAudience.Private
-    Map<String, AttachmentInternal> getAttachmentsFromRevision(RevisionInternal rev) throws CouchbaseLiteException {
+    Map<String, AttachmentInternal> getAttachmentsFromRevision(RevisionInternal rev, String prevRevID) throws CouchbaseLiteException {
 
         Map<String, Object> revAttachments = (Map<String, Object>) rev.getPropertyForKey("_attachments");
         if (revAttachments == null || revAttachments.size() == 0 || rev.isDeleted()) {
@@ -4065,18 +4076,40 @@ public final class Database {
                 // This means it's already been registered in _pendingAttachmentsByDigest;
                 // I just need to look it up by its "digest" property and install it into the store:
                 installAttachment(attachment, attachInfo);
-
             }
             else {
                 // This item is just a stub; validate and skip it
-                if (((Boolean)attachInfo.get("stub")).booleanValue() == false) {
+                if (((Boolean) attachInfo.get("stub")).booleanValue() == false) {
                     throw new CouchbaseLiteException("Expected this attachment to be a stub", Status.BAD_ATTACHMENT);
                 }
-                int revPos = ((Integer)attachInfo.get("revpos")).intValue();
+                int revPos = ((Integer) attachInfo.get("revpos")).intValue();
                 if (revPos <= 0) {
                     throw new CouchbaseLiteException("Invalid revpos: " + revPos, Status.BAD_ATTACHMENT);
                 }
-                continue;
+                Map<String, Object> parentAttachments = getAttachments(rev.getDocId(), prevRevID);
+                if (parentAttachments != null && parentAttachments.containsKey(name)) {
+                    Map<String, Object> parentAttachment = (Map<String, Object>) parentAttachments.get(name);
+                    try {
+                        BlobKey blobKey = new BlobKey((String) attachInfo.get("digest"));
+                        attachment.setBlobKey(blobKey);
+                    } catch (IllegalArgumentException e) {
+                        continue;
+                    }
+                } else if (parentAttachments == null || !parentAttachments.containsKey(name)) {
+                    BlobKey blobKey = null;
+                    try {
+                        blobKey = new BlobKey((String) attachInfo.get("digest"));
+                    } catch (IllegalArgumentException e) {
+                        continue;
+                    }
+                    if (getAttachments().hasBlobForKey(blobKey)) {
+                        attachment.setBlobKey(blobKey);
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
             }
 
             // Handle encoded attachment:
@@ -4127,7 +4160,7 @@ public final class Database {
 
         String docId = rev.getDocId();
         String revId = rev.getRevId();
-        if(!isValidDocumentId(docId) || (revId == null)) {
+        if (!isValidDocumentId(docId) || (revId == null)) {
             throw new CouchbaseLiteException(Status.BAD_REQUEST);
         }
 
@@ -4135,29 +4168,38 @@ public final class Database {
         if (revHistory != null) {
             historyCount = revHistory.size();
         }
-        if(historyCount == 0) {
+        if (historyCount == 0) {
             revHistory = new ArrayList<String>();
             revHistory.add(revId);
             historyCount = 1;
-        } else if(!revHistory.get(0).equals(rev.getRevId())) {
+        } else if (!revHistory.get(0).equals(rev.getRevId())) {
             throw new CouchbaseLiteException(Status.BAD_REQUEST);
         }
 
         boolean success = false;
         beginTransaction();
         try {
-            // First look up all locally-known revisions of this document:
+            // First look up the document's row-id and all locally-known revisions of it:
+            Map<String, RevisionInternal> localRevs = null;
+            boolean isNewDoc = (historyCount == 1);
             long docNumericID = getOrInsertDocNumericID(docId);
-            RevisionList localRevs = getAllRevisionsOfDocumentID(docId, docNumericID, false);
-            if(localRevs == null) {
-                throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
+
+            if (!isNewDoc) {
+                RevisionList localRevsList = getAllRevisionsOfDocumentID(docId, docNumericID, false);
+                if (localRevsList == null) {
+                    throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
+                }
+                localRevs = new HashMap<String, RevisionInternal>();
+                for (RevisionInternal r : localRevsList) {
+                    localRevs.put(r.getRevId(), r);
+                }
             }
 
             // Validate against the latest common ancestor:
-            if(validations != null && validations.size() > 0) {
+            if (validations != null && validations.size() > 0) {
                 RevisionInternal oldRev = null;
                 for (int i = 1; i < historyCount; i++) {
-                    oldRev = localRevs.revWithDocIdAndRevId(docId, revHistory.get(i));
+                    oldRev = (localRevs != null) ? localRevs.get(revHistory.get(i)) : null;
                     if (oldRev != null) {
                         break;
                     }
@@ -4174,7 +4216,7 @@ public final class Database {
                 oldWinnerWasDeletion = true;
             }
             if (outIsConflict.get()) {
-               inConflict = true;
+                inConflict = true;
             }
 
             // Walk through the remote history in chronological order, matching each revision ID to
@@ -4182,35 +4224,31 @@ public final class Database {
             // in the local history:
             long sequence = 0;
             long localParentSequence = 0;
-            String localParentRevID = null;
-            for(int i = revHistory.size() - 1; i >= 0; --i) {
+            for (int i = revHistory.size() - 1; i >= 0; --i) {
                 revId = revHistory.get(i);
-                RevisionInternal localRev = localRevs.revWithDocIdAndRevId(docId, revId);
-                if(localRev != null) {
+                RevisionInternal localRev = (localRevs != null) ? localRevs.get(revId) : null;
+                if (localRev != null) {
                     // This revision is known locally. Remember its sequence as the parent of the next one:
                     sequence = localRev.getSequence();
-                    assert(sequence > 0);
+                    assert (sequence > 0);
                     localParentSequence = sequence;
-                    localParentRevID = revId;
-                }
-                else {
+                } else {
                     // This revision isn't known, so add it:
 
                     RevisionInternal newRev;
                     byte[] data = null;
                     boolean current = false;
-                    if(i == 0) {
+                    if (i == 0) {
                         // Hey, this is the leaf revision we're inserting:
-                       newRev = rev;
-                       if(!rev.isDeleted()) {
-                           data = encodeDocumentJSON(rev);
-                           if(data == null) {
-                               throw new CouchbaseLiteException(Status.BAD_REQUEST);
-                           }
-                       }
-                       current = true;
-                    }
-                    else {
+                        newRev = rev;
+                        if (!rev.isDeleted()) {
+                            data = encodeDocumentJSON(rev);
+                            if (data == null) {
+                                throw new CouchbaseLiteException(Status.BAD_REQUEST);
+                            }
+                        }
+                        current = true;
+                    } else {
                         // It's an intermediate parent, so insert a stub:
                         newRev = new RevisionInternal(docId, revId, false);
                     }
@@ -4218,14 +4256,15 @@ public final class Database {
                     // Insert it:
                     sequence = insertRevision(newRev, docNumericID, sequence, current, (newRev.getAttachments() != null && newRev.getAttachments().size() > 0), data);
 
-                    if(sequence <= 0) {
+                    if (sequence <= 0) {
                         throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
                     }
 
-                    if(i == 0) {
+                    if (i == 0) {
                         // Write any changed attachments for the new revision. As the parent sequence use
                         // the latest local revision (this is to copy attachments from):
-                        Map<String, AttachmentInternal> attachments = getAttachmentsFromRevision(rev);
+                        String prevRevID = (revHistory.size() >= 2) ? revHistory.get(1) : null;
+                        Map<String, AttachmentInternal> attachments = getAttachmentsFromRevision(rev, prevRevID);
                         if (attachments != null) {
                             processAttachmentsForRevision(attachments, rev, localParentSequence);
                             stubOutAttachmentsInRevision(attachments, rev);
@@ -4236,10 +4275,10 @@ public final class Database {
             }
 
             // Mark the latest local rev as no longer current:
-            if(localParentSequence > 0 && localParentSequence != sequence) {
+            if (localParentSequence > 0 && localParentSequence != sequence) {
                 ContentValues args = new ContentValues();
                 args.put("current", 0);
-                String[] whereArgs = { Long.toString(localParentSequence) };
+                String[] whereArgs = {Long.toString(localParentSequence)};
                 int numRowsChanged = 0;
                 try {
                     numRowsChanged = database.update("revs", args, "sequence=? AND current!=0", whereArgs);
@@ -4258,7 +4297,7 @@ public final class Database {
             // Notify and return:
             databaseStorageChanged(new DocumentChange(rev, winningRev, inConflict, source));
 
-        } catch(SQLException e) {
+        } catch (SQLException e) {
             throw new CouchbaseLiteException(Status.INTERNAL_SERVER_ERROR);
         } finally {
             endTransaction(success);
