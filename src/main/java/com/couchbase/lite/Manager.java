@@ -284,7 +284,8 @@ public final class Manager {
 
     private void replaceDatabase(String databaseName, InputStream databaseStream, Iterator<Map.Entry<String, InputStream>> attachmentStreams) throws CouchbaseLiteException {
         try {
-            Database database = getDatabase(databaseName);
+            //Database database = getDatabase(databaseName);
+            Database database = getDatabaseWithoutOpening(databaseName, false);
             String dstAttachmentsPath = database.getAttachmentStorePath();
             OutputStream destStream = new FileOutputStream(new File(database.getPath()));
             StreamUtils.copyStream(databaseStream, destStream);
@@ -687,6 +688,14 @@ public final class Manager {
     @InterfaceAudience.Private
     private static boolean isWindows() {
         return (OS.indexOf("win") >= 0);
+    }
+
+    /**
+     * @exclude
+     */
+    @InterfaceAudience.Private
+    public int getExecutorThreadPoolSize() {
+        return this.options.getExecutorThreadPoolSize();
     }
 }
 
